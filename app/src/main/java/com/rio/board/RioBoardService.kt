@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.inputmethodservice.InputMethodService
@@ -30,6 +31,7 @@ import org.json.JSONArray
 class RioBoardService : InputMethodService() {
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS }
 
     private class Key(
         val label: String,
@@ -63,6 +65,9 @@ class RioBoardService : InputMethodService() {
         Theme("Midnight", "#0B1026", "#18204A", "#232C63", "#00B4D8", "#7B2CBF", "#3A4690", "#FFFFFF", "#8FA3FF", "#DDEBFF"),
         Theme("Forest", "#0F1F17", "#1C3A2A", "#26503A", "#2ECC71", "#F39C12", "#3F7A58", "#FFFFFF", "#9BD6B0", "#FFFFFF"),
         Theme("Rose", "#2A1220", "#4A2038", "#63304D", "#FF4D8D", "#B84DFF", "#8A3F67", "#FFFFFF", "#F5A9CC", "#FFE8F2"),
+        Theme("Ocean", "#06202B", "#0E3A4D", "#16526B", "#00C2A8", "#3B82F6", "#2A7A99", "#FFFFFF", "#8CD3E6", "#E6FBFF"),
+        Theme("Sunset", "#2B1408", "#4D2A12", "#6A3A1A", "#FF7A18", "#E8478B", "#8F5A30", "#FFFFFF", "#F2B88A", "#FFF1E0"),
+        Theme("Purple", "#1B1030", "#2F1D54", "#432A78", "#A855F7", "#EC4899", "#6A4DA8", "#FFFFFF", "#C4A8F0", "#F3E8FF"),
         Theme("Light", "#E8EAF0", "#FFFFFF", "#C9CEDB", "#3B82F6", "#7C6CE0", "#B8BFD3", "#111111", "#5B6382", "#8FB8FF")
     )
 
@@ -73,9 +78,15 @@ class RioBoardService : InputMethodService() {
     private var siLayer = 0           // 0 consonants, 1 vowels, 2 pili/signs
     private var lastShiftTap = 0L
     private var themeIdx = 0
-    private var snowMode = 1          // 0 off, 1 keyboard area, 2 full screen
-    private var clipOpen = false
+    private var snowMode = 2          // 0 off, 1 keyboard area, 2 full screen
+    private var lastSnow = 2
+    private var haptic = true
+    private var keyHIdx = 1
+    private var panel = Panel.NONE
     private val clips = ArrayList<String>()
+
+    private val keyHs = intArrayOf(44, 50, 56)
+    private val keyH: Int get() = keyHs[keyHIdx]
 
     private lateinit var prefs: SharedPreferences
     private lateinit var cm: ClipboardManager
@@ -103,7 +114,10 @@ class RioBoardService : InputMethodService() {
         super.onCreate()
         prefs = getSharedPreferences("rio_board", MODE_PRIVATE)
         themeIdx = prefs.getInt("theme", 0).coerceIn(0, themes.size - 1)
-        snowMode = prefs.getInt("snow", 1).coerceIn(0, 2)
+        snowMode = prefs.getInt("snow", 2).coerceIn(0, 2)
+        lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
+        haptic = prefs.getBoolean("haptic", true)
+        keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
         try {
             val arr = JSONArray(prefs.getString("clips", "[]"))
             for (i in 0 until arr.length()) clips.add(arr.getString(i))
@@ -119,6 +133,7 @@ class RioBoardService : InputMethodService() {
     }
 
     override fun onCreateInputView(): View {
+        makeWindowTransparent()
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(3), dp(4), dp(3), dp(6))
@@ -140,6 +155,7 @@ class RioBoardService : InputMethodService() {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
+        frame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateSnowTop() }
         render()
         applySnow()
         return frame
@@ -148,8 +164,9 @@ class RioBoardService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         if (!::root.isInitialized) return
+        makeWindowTransparent()
         if (shift == 1) shift = 0
-        clipOpen = false
+        panel = Panel.NONE
         captureClip()
         render()
         applySnow()
@@ -157,11 +174,20 @@ class RioBoardService : InputMethodService() {
 
     override fun onEvaluateFullscreenMode(): Boolean = false
 
-    // In full-screen snow mode only the keyboard part is touchable;
-    // touches on the snow area pass through to the app below.
+    private fun makeWindowTransparent() {
+        try {
+            window?.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        } catch (e: Exception) {
+        }
+    }
+
+    // When the window is taller than the keyboard (snow area above it),
+    // only the keyboard part is touchable; the rest passes through to the app.
     override fun onComputeInsets(outInsets: InputMethodService.Insets) {
         super.onComputeInsets(outInsets)
-        if (snowMode == 2 && ::root.isInitialized && root.height > 0) {
+        if (::root.isInitialized && ::frame.isInitialized &&
+            root.height > 0 && frame.height - root.height > dp(40)
+        ) {
             val loc = IntArray(2)
             root.getLocationInWindow(loc)
             val top = loc[1]
@@ -176,6 +202,7 @@ class RioBoardService : InputMethodService() {
     private fun applySnow() {
         if (!::snow.isInitialized || !::frame.isInitialized) return
         snow.color = th.snow
+        snow.base = if (snowMode == 2) 75 else 40
         snow.running = snowMode != 0
         val lp = frame.layoutParams
         if (lp != null) {
@@ -186,6 +213,20 @@ class RioBoardService : InputMethodService() {
                 frame.layoutParams = lp
             }
         }
+        updateSnowTop()
+    }
+
+    private fun updateSnowTop() {
+        if (!::snow.isInitialized || !::root.isInitialized) return
+        snow.topLimit = if (snowMode == 1) root.top.toFloat() else 0f
+    }
+
+    private fun setSnow(mode: Int) {
+        snowMode = mode
+        if (mode != 0) lastSnow = mode
+        prefs.edit().putInt("snow", snowMode).putInt("lastsnow", lastSnow).apply()
+        applySnow()
+        render()
     }
 
     // ---------- rendering ----------
@@ -193,97 +234,190 @@ class RioBoardService : InputMethodService() {
         root.removeAllViews()
         root.setBackgroundColor(th.bg)
         root.addView(toolbar())
-        if (clipOpen) {
-            renderClipboard()
-            return
-        }
-        root.addView(row(chars("1234567890")))
-        if (siMode) renderSinhala() else renderEnglish()
-    }
-
-    private fun toolbar(): LinearLayout {
-        val snowKey = Key(
-            if (snowMode == 2) "❄+" else "❄", 1f,
-            when (snowMode) {
-                0 -> Style.SPECIAL
-                1 -> Style.ACTIVE
-                else -> Style.ACCENT
-            }, 15f
-        ) {
-            snowMode = (snowMode + 1) % 3
-            prefs.edit().putInt("snow", snowMode).apply()
-            applySnow()
-            render()
-        }
-        val keys = listOf(
-            Key("📋", 1f, Style.SPECIAL, 16f) { pasteNow() },
-            Key("🕘", 1f, Style.SPECIAL, 16f) { clipOpen = true; render() },
-            Key("All", 1f, Style.SPECIAL, 13f) { menuAction(android.R.id.selectAll) },
-            Key("Copy", 1.2f, Style.SPECIAL, 12f) { menuAction(android.R.id.copy) },
-            Key("Cut", 1f, Style.SPECIAL, 13f) { menuAction(android.R.id.cut) },
-            snowKey,
-            Key("🎨", 1f, Style.SPECIAL, 16f) {
-                themeIdx = (themeIdx + 1) % themes.size
-                prefs.edit().putInt("theme", themeIdx).apply()
-                applySnow()
-                render()
-            },
-            Key("⚙", 1f, Style.SPECIAL, 16f) {
-                val i = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(i)
+        when (panel) {
+            Panel.CLIPBOARD -> renderClipboard()
+            Panel.THEME -> renderTheme()
+            Panel.SETTINGS -> renderSettings()
+            Panel.NONE -> {
+                root.addView(row(chars("1234567890")))
+                if (siMode) renderSinhala() else renderEnglish()
             }
-        )
-        return row(keys, h = 42)
+        }
     }
 
-    private fun renderClipboard() {
-        root.addView(
-            row(
-                listOf(
-                    Key("←", 1f, Style.SPECIAL) { clipOpen = false; render() },
-                    Key("Clipboard", 4f, Style.NORMAL, 15f) { },
-                    Key("Clear", 1.6f, Style.SPECIAL, 14f) {
-                        clips.clear()
-                        saveClips()
-                        render()
-                    }
-                )
-            )
-        )
-        val scroll = ScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(200))
+    // ----- toolbar (flat line icons, like Gboard) -----
+    private fun toolbar(): LinearLayout {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
         }
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun add(kind: IconView.Kind, active: Boolean = false, onClick: () -> Unit) {
+            bar.addView(iconButton(kind, active, onClick))
+        }
+        add(IconView.Kind.CLIPBOARD) { pasteNow() }
+        add(IconView.Kind.HISTORY, panel == Panel.CLIPBOARD) { togglePanel(Panel.CLIPBOARD) }
+        add(IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) }
+        add(IconView.Kind.COPY) { menuAction(android.R.id.copy) }
+        add(IconView.Kind.CUT) { menuAction(android.R.id.cut) }
+        add(IconView.Kind.SNOW, snowMode != 0) { setSnow(if (snowMode != 0) 0 else lastSnow) }
+        add(IconView.Kind.THEME, panel == Panel.THEME) { togglePanel(Panel.THEME) }
+        add(IconView.Kind.SETTINGS, panel == Panel.SETTINGS) { togglePanel(Panel.SETTINGS) }
+        return bar
+    }
+
+    private fun togglePanel(p: Panel) {
+        panel = if (panel == p) Panel.NONE else p
+        render()
+    }
+
+    private fun iconButton(kind: IconView.Kind, active: Boolean, onClick: () -> Unit): View {
+        val v = IconView(this, kind)
+        v.tint = if (active) th.accent else th.text
+        v.alpha = if (active) 1f else 0.85f
+        v.background = flatBg()
+        v.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+            setMargins(dp(1), dp(2), dp(1), dp(2))
+        }
+        v.isClickable = true
+        v.setOnClickListener {
+            feedback(it)
+            onClick()
+        }
+        return v
+    }
+
+    private fun flatBg(): StateListDrawable {
+        fun shape(c: Int) = GradientDrawable().apply {
+            cornerRadius = dp(10).toFloat()
+            setColor(c)
+        }
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), shape(th.pressed))
+            addState(intArrayOf(), shape(Color.TRANSPARENT))
+        }
+    }
+
+    private fun roundBg(color: Int, radiusDp: Int): StateListDrawable {
+        fun shape(c: Int) = GradientDrawable().apply {
+            cornerRadius = dp(radiusDp).toFloat()
+            setColor(c)
+        }
+        return StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), shape(th.pressed))
+            addState(intArrayOf(), shape(color))
+        }
+    }
+
+    private fun feedback(v: View) {
+        if (haptic) v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+    }
+
+    // ----- panels -----
+    private fun panelHeader(title: String, actionKind: IconView.Kind? = null, action: (() -> Unit)? = null): LinearLayout {
+        val h = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
+        }
+        fun side(kind: IconView.Kind, onClick: () -> Unit): View {
+            val b = iconButton(kind, false, onClick)
+            b.layoutParams = LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT).apply {
+                setMargins(dp(2), dp(3), dp(2), dp(3))
+            }
+            return b
+        }
+        h.addView(side(IconView.Kind.BACK) { panel = Panel.NONE; render() })
+        h.addView(TextView(this).apply {
+            text = title
+            setTextColor(th.text)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                leftMargin = dp(6)
+            }
+        })
+        if (actionKind != null && action != null) {
+            h.addView(side(actionKind, action))
+        } else {
+            h.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(52), 1) })
+        }
+        return h
+    }
+
+    private fun panelBody(content: View): ScrollView {
+        return ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH * 4))
+            isVerticalScrollBarEnabled = false
+            addView(content)
+        }
+    }
+
+    private fun hintText(s: String): TextView = TextView(this).apply {
+        text = s
+        setTextColor(th.hint)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        setPadding(dp(8), dp(10), dp(8), dp(4))
+        gravity = Gravity.CENTER
+    }
+
+    // ----- clipboard panel (card grid, like Gboard) -----
+    private fun renderClipboard() {
+        root.addView(panelHeader("Clipboard", IconView.Kind.TRASH) {
+            clips.clear()
+            saveClips()
+            render()
+        })
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(2), dp(4), dp(8))
+        }
         if (clips.isEmpty()) {
             list.addView(TextView(this).apply {
-                text = "Clipboard හිස්. Text එකක් copy කළාම මෙතන පෙනෙනවා."
+                text = "Clipboard හිස්.\nText එකක් copy කළාම මෙතන පෙනෙනවා."
                 setTextColor(th.hint)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                setPadding(dp(12), dp(16), dp(12), dp(16))
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(40), dp(12), dp(16))
             })
         } else {
-            clips.toList().forEach { list.addView(clipItem(it)) }
+            clips.toList().chunked(2).forEach { pair ->
+                val r = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+                pair.forEach { r.addView(clipCard(it)) }
+                if (pair.size == 1) {
+                    r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+                }
+                list.addView(r)
+            }
+            list.addView(hintText("Tap = paste  ·  Long press = delete"))
         }
-        scroll.addView(list)
-        root.addView(scroll)
+        root.addView(panelBody(list))
     }
 
-    private fun clipItem(text: String): View {
+    private fun clipCard(text: String): View {
         val tv = TextView(this)
         tv.text = text
-        tv.maxLines = 2
+        tv.maxLines = 4
+        tv.minHeight = dp(64)
         tv.ellipsize = TextUtils.TruncateAt.END
+        tv.gravity = Gravity.TOP or Gravity.START
         tv.setTextColor(th.text)
-        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         tv.setPadding(dp(12), dp(10), dp(12), dp(10))
-        tv.background = bg(th.key)
-        tv.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+        tv.background = roundBg(th.key, 14)
+        tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            setMargins(dp(4), dp(4), dp(4), dp(4))
+        }
         tv.setOnClickListener {
+            feedback(it)
             type(text)
-            clipOpen = false
+            panel = Panel.NONE
             render()
         }
         tv.setOnLongClickListener {
@@ -295,6 +429,138 @@ class RioBoardService : InputMethodService() {
         return tv
     }
 
+    // ----- theme panel -----
+    private fun renderTheme() {
+        root.addView(panelHeader("Theme"))
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(6), dp(4), dp(8))
+        }
+        themes.withIndex().toList().chunked(4).forEach { items ->
+            val r = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            items.forEach { (i, t) -> r.addView(swatch(i, t)) }
+            grid.addView(r)
+        }
+        root.addView(panelBody(grid))
+    }
+
+    private fun swatch(index: Int, t: Theme): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(2), dp(6), dp(2), dp(6))
+            }
+        }
+        val selected = index == themeIdx
+        val circle = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(t.key)
+                setStroke(dp(if (selected) 4 else 2), if (selected) t.accent else t.special)
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
+        }
+        val dot = TextView(this).apply {
+            text = if (selected) "✓" else ""
+            setTextColor(t.accent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        }
+        val label = TextView(this).apply {
+            text = t.name
+            setTextColor(th.text)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(4), 0, 0)
+        }
+        box.addView(circle)
+        box.addView(label)
+        box.setOnClickListener {
+            feedback(it)
+            themeIdx = index
+            prefs.edit().putInt("theme", themeIdx).apply()
+            applySnow()
+            render()
+        }
+        return box
+    }
+
+    // ----- settings panel -----
+    private fun renderSettings() {
+        root.addView(panelHeader("Settings"))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(2), dp(8), dp(10))
+        }
+        box.addView(settingLabel("Snow ❄"))
+        box.addView(chipRow(listOf("Off", "Keyboard", "Full screen"), snowMode) { setSnow(it) })
+        box.addView(settingLabel("Vibration"))
+        box.addView(chipRow(listOf("On", "Off"), if (haptic) 0 else 1) {
+            haptic = it == 0
+            prefs.edit().putBoolean("haptic", haptic).apply()
+            render()
+        })
+        box.addView(settingLabel("Key height"))
+        box.addView(chipRow(listOf("Small", "Normal", "Large"), keyHIdx) {
+            keyHIdx = it
+            prefs.edit().putInt("keyh", keyHIdx).apply()
+            render()
+        })
+        box.addView(TextView(this).apply {
+            text = "Open RIO BOARD app"
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            background = roundBg(th.accent, 12)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply {
+                setMargins(dp(3), dp(14), dp(3), dp(4))
+            }
+            setOnClickListener {
+                startActivity(Intent(this@RioBoardService, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        })
+        root.addView(panelBody(box))
+    }
+
+    private fun settingLabel(s: String): TextView = TextView(this).apply {
+        text = s
+        setTextColor(th.hint)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        setPadding(dp(4), dp(10), dp(4), dp(4))
+    }
+
+    private fun chipRow(options: List<String>, selected: Int, onSelect: (Int) -> Unit): LinearLayout {
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42))
+        }
+        options.forEachIndexed { i, label ->
+            val on = i == selected
+            r.addView(TextView(this).apply {
+                text = label
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTextColor(if (on) Color.WHITE else th.text)
+                background = roundBg(if (on) th.accent else th.key, 12)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    setMargins(dp(3), dp(2), dp(3), dp(2))
+                }
+                setOnClickListener {
+                    feedback(it)
+                    onSelect(i)
+                }
+            })
+        }
+        return r
+    }
+
+    // ----- typing layouts -----
     private fun renderEnglish() {
         if (symbols) {
             root.addView(row(chars("@#$%&*-+()")))
@@ -352,7 +618,7 @@ class RioBoardService : InputMethodService() {
         }
         repeat(3 - layer.size) {
             root.addView(View(this).apply {
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
             })
         }
         val nextLabel = when ((siLayer + 1) % 3) {
@@ -387,7 +653,7 @@ class RioBoardService : InputMethodService() {
     // ---------- view helpers ----------
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun row(keys: List<Key>, pad: Float = 0f, h: Int = 50): LinearLayout {
+    private fun row(keys: List<Key>, pad: Float = 0f, h: Int = keyH): LinearLayout {
         val r = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(h))
@@ -400,17 +666,6 @@ class RioBoardService : InputMethodService() {
 
     private fun spacer(w: Float) = View(this).apply {
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, w)
-    }
-
-    private fun bg(color: Int): StateListDrawable {
-        fun shape(c: Int) = GradientDrawable().apply {
-            cornerRadius = dp(8).toFloat()
-            setColor(c)
-        }
-        return StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_pressed), shape(th.pressed))
-            addState(intArrayOf(), shape(color))
-        }
     }
 
     private fun keyView(k: Key): View {
@@ -431,13 +686,13 @@ class RioBoardService : InputMethodService() {
             tv.letterSpacing = 0.2f
             tv.typeface = Typeface.DEFAULT_BOLD
         }
-        tv.background = bg(
+        tv.background = roundBg(
             when (k.style) {
                 Style.NORMAL -> th.key
                 Style.SPECIAL -> th.special
                 Style.ACCENT -> th.accent
                 Style.ACTIVE -> th.active
-            }
+            }, 8
         )
         tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, k.weight).apply {
             setMargins(dp(2), dp(3), dp(2), dp(3))
@@ -455,7 +710,7 @@ class RioBoardService : InputMethodService() {
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         view.isPressed = true
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        feedback(view)
                         k.onPress()
                         handler.postDelayed(r, 400)
                     }
@@ -468,7 +723,7 @@ class RioBoardService : InputMethodService() {
             }
         } else {
             tv.setOnClickListener {
-                it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                feedback(it)
                 k.onPress()
             }
             val long = k.onLong

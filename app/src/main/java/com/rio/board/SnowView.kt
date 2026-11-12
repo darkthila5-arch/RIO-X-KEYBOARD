@@ -27,6 +27,9 @@ class SnowView(context: Context) : View(context) {
     var color: Int = Color.WHITE
     var base: Int = 45
 
+    /** Snow only appears below this y (used to keep snow on the keyboard area only). */
+    var topLimit: Float = 0f
+
     var running: Boolean = false
         set(value) {
             field = value
@@ -39,13 +42,15 @@ class SnowView(context: Context) : View(context) {
     fun burst() {
         if (!running || width == 0) return
         repeat(4) {
-            if (flakes.size < 140) flakes.add(newFlake(true))
+            if (flakes.size < 150) flakes.add(newFlake(true))
         }
     }
 
     private fun newFlake(top: Boolean): Flake {
         val r = (1.2f + rnd.nextFloat() * 2.8f) * d
-        val y = if (top) -r - rnd.nextFloat() * 30f * d else rnd.nextFloat() * height
+        val span = (height - topLimit).coerceAtLeast(1f)
+        val y = if (top) topLimit - r - rnd.nextFloat() * 30f * d
+        else topLimit + rnd.nextFloat() * span
         return Flake(
             rnd.nextFloat() * width, y, r,
             (35f + rnd.nextFloat() * 75f) * d,
@@ -64,6 +69,8 @@ class SnowView(context: Context) : View(context) {
 
         while (flakes.size < base) flakes.add(newFlake(false))
 
+        canvas.save()
+        canvas.clipRect(0f, topLimit, width.toFloat(), height.toFloat())
         paint.color = color
         val iter = flakes.iterator()
         while (iter.hasNext()) {
@@ -75,12 +82,13 @@ class SnowView(context: Context) : View(context) {
                     iter.remove()
                     continue
                 }
-                f.y = -f.r
+                f.y = topLimit - f.r
                 f.x = rnd.nextFloat() * width
             }
             paint.alpha = (120 + (f.r / (4f * d)) * 135).toInt().coerceIn(80, 255)
             canvas.drawCircle(f.x + sin(f.phase) * f.amp, f.y, f.r, paint)
         }
+        canvas.restore()
         postInvalidateOnAnimation()
     }
 }
