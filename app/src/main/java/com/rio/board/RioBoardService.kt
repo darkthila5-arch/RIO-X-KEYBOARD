@@ -3,12 +3,15 @@ package com.rio.board
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.inputmethodservice.InputMethodService
+import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -21,19 +24,26 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 class RioBoardService : InputMethodService() {
 
+    companion object {
+        var instance: RioBoardService? = null
+    }
+
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONT }
 
     private class Key(
         val label: String,
@@ -73,7 +83,15 @@ class RioBoardService : InputMethodService() {
         Theme("Light", "#E8EAF0", "#FFFFFF", "#C9CEDB", "#3B82F6", "#7C6CE0", "#B8BFD3", "#111111", "#5B6382", "#8FB8FF")
     )
 
-    // snow colours: auto (theme), then fixed colours, last = rainbow
+    // custom theme (index = themes.size)
+    private val customBgs = listOf("#101010", "#0B1A2E", "#1A0B2E", "#2E0B16", "#0B2E1A", "#2E260B", "#1C1C28", "#000000")
+    private val customAccents = listOf("#3B82F6", "#22C55E", "#EF4444", "#F59E0B", "#A855F7", "#EC4899", "#14B8A6", "#FFFFFF")
+    private var customBgIdx = 0
+    private var customAccIdx = 0
+    private var customCache: Theme? = null
+
+    // effects
+    private val effectNames = listOf("Snow", "Rain", "Hearts", "Stars", "Confetti", "Bubbles")
     private val snowPalette = listOf("auto", "#FFFFFF", "#7CC8FF", "#FF8AC8", "#FFD54A", "#7CFFB2", "rainbow")
     private val rainbow = intArrayOf(
         0xFFFF5252.toInt(), 0xFFFFA726.toInt(), 0xFFFFEE58.toInt(), 0xFF66BB6A.toInt(),
@@ -94,10 +112,11 @@ class RioBoardService : InputMethodService() {
         "🐶" to ("🐶 🐱 🐭 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🦅 🐢 🐍 🐙 🐬 🦋 🌹 🌸 🌴 🌈 ☀️ 🌙 ❄️ 🍎 🍌 🍉 🍇 🍓 🍕 🍔 🍟 🌭 🍩 🍪 🎂 🍫 ☕ 🍺 🥤 🍜").split(" "),
         "🚀" to ("📱 💻 🎧 🎮 📷 🎬 🎵 🎶 🚗 ✈️ 🚀 🏠 ⚽ 🏏 🏆 🎁 💰 💎 🔑 🔒 📌 📎 ✏️ 📚 💡 🔔 ⏰ 📞 🇱🇰 🚌 🏍️ 🎯 🎈 🛒 📝 📍 ⚙️ 🔋 📶").split(" ")
     )
-    private var emojiCat = 0
+    private val recent = ArrayList<String>()
+    private var emojiTab = 1
 
     // ---------- state ----------
-    private var siMode = false        // false = English, true = Sinhala
+    private var lang = 0              // 0 English, 1 Sinhala keys, 2 Singlish
     private var shift = 0             // 0 off, 1 once, 2 caps lock
     private var symbols = false
     private var siLayer = 0           // 0 consonants, 1 vowels, 2 pili/signs
@@ -105,27 +124,43 @@ class RioBoardService : InputMethodService() {
     private var themeIdx = 0
     private var snowMode = 2          // 0 off, 1 keyboard area, 2 full screen
     private var lastSnow = 2
+    private var effectIdx = 0
     private var snowColorIdx = 0
     private var haptic = true
+    private var soundOn = false
+    private var oneHand = 0           // 0 off, 1 left, 2 right
     private var keyHIdx = 1
+    private var fontStyle = 0
     private var panel = Panel.NONE
     private var toolbarX = 0
     private var toolsPinned = false
     private var suggestions: List<String> = emptyList()
     private val clips = ArrayList<String>()
     private val learned = HashMap<String, Int>()
+    private var bgBitmap: Bitmap? = null
+    private var pendingVoice: String? = null
+
+    // Singlish composing: raw latin letters + what is currently shown on screen
+    private val sgBuf = StringBuilder()
+    private var sgShown = ""
 
     private val keyHs = intArrayOf(44, 50, 56)
     private val keyH: Int get() = keyHs[keyHIdx]
+    private val bgOn: Boolean get() = bgBitmap != null
 
     private lateinit var prefs: SharedPreferences
     private lateinit var cm: ClipboardManager
     private lateinit var frame: FrameLayout
+    private lateinit var kbBox: FrameLayout
     private lateinit var root: LinearLayout
     private lateinit var barHolder: LinearLayout
+    private lateinit var bgImage: ImageView
+    private lateinit var bgDim: View
     private lateinit var snow: SnowView
     private val handler = Handler(Looper.getMainLooper())
-    private val th: Theme get() = themes[themeIdx]
+
+    private val th: Theme
+        get() = if (themeIdx >= themes.size) customThemeObj() else themes[themeIdx]
 
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener { captureClip() }
 
@@ -143,13 +178,20 @@ class RioBoardService : InputMethodService() {
     // ---------- lifecycle ----------
     override fun onCreate() {
         super.onCreate()
+        instance = this
         prefs = getSharedPreferences("rio_board", MODE_PRIVATE)
-        themeIdx = prefs.getInt("theme", 0).coerceIn(0, themes.size - 1)
+        themeIdx = prefs.getInt("theme", 0).coerceIn(0, themes.size)
         snowMode = prefs.getInt("snow", 2).coerceIn(0, 2)
         lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
+        effectIdx = prefs.getInt("effect", 0).coerceIn(0, effectNames.size - 1)
         snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
         haptic = prefs.getBoolean("haptic", true)
+        soundOn = prefs.getBoolean("sound", false)
+        oneHand = prefs.getInt("onehand", 0).coerceIn(0, 2)
         keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
+        fontStyle = prefs.getInt("font", 0).coerceIn(0, Fonts.names.size - 1)
+        customBgIdx = prefs.getInt("cbg", 0).coerceIn(0, customBgs.size - 1)
+        customAccIdx = prefs.getInt("cacc", 0).coerceIn(0, customAccents.size - 1)
         try {
             val arr = JSONArray(prefs.getString("clips", "[]"))
             for (i in 0 until arr.length()) clips.add(arr.getString(i))
@@ -160,12 +202,16 @@ class RioBoardService : InputMethodService() {
             o.keys().forEach { learned[it] = o.getInt(it) }
         } catch (e: Exception) {
         }
+        val rec = prefs.getString("recent", "") ?: ""
+        rec.split(" ").filter { it.isNotBlank() }.forEach { recent.add(it) }
+        loadBg()
         cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         cm.addPrimaryClipChangedListener(clipListener)
     }
 
     override fun onDestroy() {
         cm.removePrimaryClipChangedListener(clipListener)
+        if (instance === this) instance = null
         super.onDestroy()
     }
 
@@ -179,10 +225,28 @@ class RioBoardService : InputMethodService() {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
         }
+        bgImage = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            visibility = View.GONE
+        }
+        bgDim = View(this)
+        kbBox = FrameLayout(this)
+        kbBox.addView(
+            bgImage,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        kbBox.addView(
+            bgDim,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        kbBox.addView(
+            root,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
         snow = SnowView(this)
         frame = FrameLayout(this)
         frame.addView(
-            root,
+            kbBox,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -198,6 +262,7 @@ class RioBoardService : InputMethodService() {
         )
         frame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateSnowTop() }
         render()
+        applyLayout()
         applySnow()
         return frame
     }
@@ -209,10 +274,13 @@ class RioBoardService : InputMethodService() {
         if (shift == 1) shift = 0
         panel = Panel.NONE
         toolsPinned = false
+        sgReset()
         captureClip()
         suggestions = computeSuggestions()
         render()
+        applyLayout()
         applySnow()
+        if (pendingVoice != null) handler.postDelayed({ flushVoice() }, 350)
     }
 
     override fun onUpdateSelection(
@@ -232,37 +300,138 @@ class RioBoardService : InputMethodService() {
         }
     }
 
-    // When the window is taller than the keyboard (snow area above it),
-    // only the keyboard part is touchable; the rest passes through to the app.
+    // Only the keyboard itself is touchable when the window is taller than the keyboard
+    // (effects area) or when one-handed mode leaves empty space on one side.
     override fun onComputeInsets(outInsets: InputMethodService.Insets) {
         super.onComputeInsets(outInsets)
-        if (::root.isInitialized && ::frame.isInitialized &&
-            root.height > 0 && frame.height - root.height > dp(40)
+        if (::kbBox.isInitialized && ::frame.isInitialized && kbBox.height > 0 &&
+            (frame.height - kbBox.height > dp(40) || oneHand != 0)
         ) {
             val loc = IntArray(2)
-            root.getLocationInWindow(loc)
+            kbBox.getLocationInWindow(loc)
             val top = loc[1]
             outInsets.contentTopInsets = top
             outInsets.visibleTopInsets = top
             outInsets.touchableInsets = InputMethodService.Insets.TOUCHABLE_INSETS_REGION
-            outInsets.touchableRegion.set(loc[0], top, loc[0] + root.width, top + root.height)
+            outInsets.touchableRegion.set(loc[0], top, loc[0] + kbBox.width, top + kbBox.height)
         }
     }
 
-    // ---------- snow ----------
+    // ---------- voice ----------
+    private fun startVoice() {
+        sgReset()
+        val i = Intent(this, VoiceActivity::class.java)
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        i.putExtra("si", lang != 0)
+        startActivity(i)
+    }
+
+    fun voiceResult(text: String) {
+        pendingVoice = text
+        handler.postDelayed({ flushVoice() }, 500)
+    }
+
+    private fun flushVoice() {
+        val t = pendingVoice ?: return
+        val ic = currentInputConnection ?: return
+        ic.commitText("$t ", 1)
+        pendingVoice = null
+    }
+
+    // ---------- background photo ----------
+    fun reloadBackground() {
+        handler.post {
+            loadBg()
+            if (::root.isInitialized) {
+                render()
+                applyLayout()
+            }
+        }
+    }
+
+    private fun loadBg() {
+        val f = File(filesDir, "kb_bg.jpg")
+        bgBitmap = if (prefs.getBoolean("bgon", false) && f.exists()) {
+            try {
+                BitmapFactory.decodeFile(f.path)
+            } catch (e: Exception) {
+                null
+            }
+        } else null
+    }
+
+    private fun removeBackground() {
+        prefs.edit().putBoolean("bgon", false).apply()
+        try {
+            File(filesDir, "kb_bg.jpg").delete()
+        } catch (e: Exception) {
+        }
+        loadBg()
+        render()
+        applyLayout()
+    }
+
+    /** Key colours become a bit see-through when a photo is the background. */
+    private fun kc(color: Int): Int =
+        if (bgOn && Color.alpha(color) == 255) (color and 0x00FFFFFF) or (0xB8 shl 24) else color
+
+    // ---------- layout / effects ----------
+    private fun applyLayout() {
+        if (!::kbBox.isInitialized) return
+        val lp = kbBox.layoutParams as? FrameLayout.LayoutParams
+        if (lp != null) {
+            val sw = resources.displayMetrics.widthPixels
+            val w = if (oneHand == 0) ViewGroup.LayoutParams.MATCH_PARENT else (sw * 0.82f).toInt()
+            val g = Gravity.BOTTOM or when (oneHand) {
+                1 -> Gravity.START
+                2 -> Gravity.END
+                else -> Gravity.NO_GRAVITY
+            }
+            if (lp.width != w || lp.gravity != g) {
+                lp.width = w
+                lp.gravity = g
+                kbBox.layoutParams = lp
+            }
+        }
+        applyBackground()
+    }
+
+    private fun applyBackground() {
+        if (!::bgImage.isInitialized) return
+        if (bgOn) {
+            bgImage.setImageBitmap(bgBitmap)
+            bgImage.visibility = View.VISIBLE
+            bgDim.setBackgroundColor((th.bg and 0x00FFFFFF) or 0x66000000)
+        } else {
+            bgImage.setImageDrawable(null)
+            bgImage.visibility = View.GONE
+            bgDim.setBackgroundColor(Color.TRANSPARENT)
+        }
+    }
+
     private fun sysDimen(name: String): Int {
         val id = resources.getIdentifier(name, "dimen", "android")
         return if (id > 0) resources.getDimensionPixelSize(id) else 0
     }
 
+    private fun effectColors(): IntArray {
+        if (snowColorIdx == snowPalette.size - 1) return rainbow
+        if (snowColorIdx != 0) return intArrayOf(Color.parseColor(snowPalette[snowColorIdx]))
+        return when (effectIdx) {
+            0 -> intArrayOf(th.snow)
+            1 -> intArrayOf(Color.parseColor("#8FD3FF"))
+            2 -> intArrayOf(Color.parseColor("#FF5C8A"))
+            3 -> intArrayOf(Color.parseColor("#FFE066"))
+            4 -> rainbow
+            else -> intArrayOf(Color.parseColor("#BFE9FF"))
+        }
+    }
+
     private fun applySnow() {
         if (!::snow.isInitialized || !::frame.isInitialized) return
-        snow.colors = when (snowColorIdx) {
-            0 -> intArrayOf(th.snow)
-            snowPalette.size - 1 -> rainbow
-            else -> intArrayOf(Color.parseColor(snowPalette[snowColorIdx]))
-        }
-        snow.base = if (snowMode == 2) 75 else 40
+        snow.effect = effectIdx
+        snow.colors = effectColors()
+        snow.base = if (snowMode == 2) 70 else 38
         snow.running = snowMode != 0
         val lp = frame.layoutParams
         if (lp != null) {
@@ -279,8 +448,8 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun updateSnowTop() {
-        if (!::snow.isInitialized || !::root.isInitialized) return
-        snow.topLimit = if (snowMode == 1) root.top.toFloat() else 0f
+        if (!::snow.isInitialized || !::kbBox.isInitialized) return
+        snow.topLimit = if (snowMode == 1) kbBox.top.toFloat() else 0f
     }
 
     private fun setSnow(mode: Int) {
@@ -291,10 +460,78 @@ class RioBoardService : InputMethodService() {
         render()
     }
 
+    private fun setEffect(i: Int) {
+        effectIdx = i
+        prefs.edit().putInt("effect", i).apply()
+        if (snowMode == 0) {
+            snowMode = lastSnow
+            prefs.edit().putInt("snow", snowMode).apply()
+        }
+        applySnow()
+        render()
+    }
+
+    private fun setOneHand(i: Int) {
+        oneHand = i
+        prefs.edit().putInt("onehand", i).apply()
+        applyLayout()
+        render()
+    }
+
+    private fun setLang(l: Int) {
+        sgReset()
+        lang = l
+        symbols = false
+        panel = Panel.NONE
+        render()
+    }
+
+    private fun nextLang(): Int = (lang + 1) % 3
+
+    private fun langLabel(l: Int): String = when (l) {
+        0 -> "EN"
+        1 -> "සිං"
+        else -> "Sg"
+    }
+
+    // ---------- custom theme ----------
+    private fun hex(c: Int): String = String.format("#%06X", c and 0xFFFFFF)
+
+    private fun mix(a: Int, b: Int, t: Float): Int {
+        val r = (Color.red(a) * (1f - t) + Color.red(b) * t).toInt()
+        val g = (Color.green(a) * (1f - t) + Color.green(b) * t).toInt()
+        val bl = (Color.blue(a) * (1f - t) + Color.blue(b) * t).toInt()
+        return Color.rgb(r, g, bl)
+    }
+
+    private fun customThemeObj(): Theme {
+        var c = customCache
+        if (c == null) {
+            val bg = Color.parseColor(customBgs[customBgIdx])
+            val acc = Color.parseColor(customAccents[customAccIdx])
+            val white = Color.WHITE
+            c = Theme(
+                "Custom", hex(bg), hex(mix(bg, white, 0.10f)), hex(mix(bg, white, 0.20f)),
+                hex(acc), hex(mix(acc, bg, 0.45f)), hex(mix(bg, white, 0.32f)),
+                "#FFFFFF", hex(mix(bg, white, 0.65f)), "#FFFFFF"
+            )
+            customCache = c
+        }
+        return c
+    }
+
+    private fun saveCustom() {
+        customCache = null
+        prefs.edit().putInt("cbg", customBgIdx).putInt("cacc", customAccIdx).apply()
+        applySnow()
+        render()
+    }
+
     // ---------- rendering ----------
     private fun render() {
         root.removeAllViews()
-        root.setBackgroundColor(th.bg)
+        applyBackground()
+        root.setBackgroundColor(if (bgOn) Color.TRANSPARENT else th.bg)
         root.addView(barHolder)
         refreshBar()
         when (panel) {
@@ -302,9 +539,10 @@ class RioBoardService : InputMethodService() {
             Panel.THEME -> renderTheme()
             Panel.SETTINGS -> renderSettings()
             Panel.EMOJI -> renderEmoji()
+            Panel.FONT -> renderFont()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
-                if (siMode) renderSinhala() else renderEnglish()
+                if (lang == 1) renderSinhala() else renderEnglish()
             }
         }
     }
@@ -337,11 +575,13 @@ class RioBoardService : InputMethodService() {
         add(IconView.Kind.CLIPBOARD) { pasteNow() }
         add(IconView.Kind.HISTORY, panel == Panel.CLIPBOARD) { togglePanel(Panel.CLIPBOARD) }
         add(IconView.Kind.EMOJI, panel == Panel.EMOJI) { togglePanel(Panel.EMOJI) }
-        add(IconView.Kind.GLOBE) { siMode = !siMode; symbols = false; panel = Panel.NONE; render() }
+        add(IconView.Kind.MIC) { startVoice() }
+        add(IconView.Kind.FONT, panel == Panel.FONT || fontStyle != 0) { togglePanel(Panel.FONT) }
+        add(IconView.Kind.GLOBE) { setLang(nextLang()) }
         add(IconView.Kind.UNDO) { menuAction(android.R.id.undo) }
         add(IconView.Kind.REDO) { menuAction(android.R.id.redo) }
-        add(IconView.Kind.LEFT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) }
-        add(IconView.Kind.RIGHT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) }
+        add(IconView.Kind.LEFT) { moveCursor(-1) }
+        add(IconView.Kind.RIGHT) { moveCursor(1) }
         add(IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) }
         add(IconView.Kind.COPY) { menuAction(android.R.id.copy) }
         add(IconView.Kind.CUT) { menuAction(android.R.id.cut) }
@@ -441,12 +681,21 @@ class RioBoardService : InputMethodService() {
         }
         return StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_pressed), shape(th.pressed))
-            addState(intArrayOf(), shape(color))
+            addState(intArrayOf(), shape(kc(color)))
         }
     }
 
-    private fun feedback(v: View) {
+    private fun playKey(fx: Int) {
+        if (!soundOn) return
+        try {
+            (getSystemService(AUDIO_SERVICE) as AudioManager).playSoundEffect(fx, 0.6f)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun feedback(v: View, fx: Int = AudioManager.FX_KEYPRESS_STANDARD) {
         if (haptic) v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        playKey(fx)
     }
 
     // ----- panels -----
@@ -504,6 +753,15 @@ class RioBoardService : InputMethodService() {
     }
 
     // ----- emoji panel -----
+    private fun emojiList(tab: Int): List<String> = if (tab == 0) recent else emojiCats[tab - 1].second
+
+    private fun addRecent(e: String) {
+        recent.remove(e)
+        recent.add(0, e)
+        while (recent.size > 24) recent.removeAt(recent.size - 1)
+        prefs.edit().putString("recent", recent.joinToString(" ")).apply()
+    }
+
     private fun renderEmoji() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -511,18 +769,19 @@ class RioBoardService : InputMethodService() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
         }
         header.addView(backButton())
-        emojiCats.forEachIndexed { i, cat ->
+        val tabs = listOf("🕘") + emojiCats.map { it.first }
+        tabs.forEachIndexed { i, label ->
             header.addView(TextView(this).apply {
-                text = cat.first
+                text = label
                 gravity = Gravity.CENTER
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-                background = roundBg(if (i == emojiCat) th.accent else Color.TRANSPARENT, 12)
+                background = roundBg(if (i == emojiTab) th.accent else Color.TRANSPARENT, 12)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
                     setMargins(dp(3), dp(5), dp(3), dp(5))
                 }
                 setOnClickListener {
                     feedback(it)
-                    emojiCat = i
+                    emojiTab = i
                     render()
                 }
             })
@@ -533,7 +792,11 @@ class RioBoardService : InputMethodService() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(2), dp(2), dp(2), dp(8))
         }
-        emojiCats[emojiCat].second.chunked(8).forEach { items ->
+        val list = emojiList(emojiTab)
+        if (list.isEmpty()) {
+            grid.addView(hintText("Recently used emojis will show here"))
+        }
+        list.chunked(8).forEach { items ->
             val r = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46))
@@ -549,6 +812,7 @@ class RioBoardService : InputMethodService() {
                     setOnClickListener {
                         feedback(it)
                         type(e)
+                        addRecent(e)
                     }
                 })
             }
@@ -558,6 +822,47 @@ class RioBoardService : InputMethodService() {
             grid.addView(r)
         }
         root.addView(panelBody(grid))
+    }
+
+    // ----- fonts panel (stylish text) -----
+    private fun renderFont() {
+        root.addView(panelHeader("Stylish text"))
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(2), dp(4), dp(8))
+        }
+        Fonts.names.chunked(2).withIndex().forEach { (rowIdx, pair) ->
+            val r = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+            pair.forEachIndexed { j, name ->
+                val idx = rowIdx * 2 + j
+                val on = idx == fontStyle
+                r.addView(TextView(this).apply {
+                    text = Fonts.sample(idx) + "\n" + name
+                    gravity = Gravity.CENTER
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                    setTextColor(if (on) Color.WHITE else th.text)
+                    background = roundBg(if (on) th.accent else th.key, 12)
+                    setPadding(dp(6), dp(10), dp(6), dp(10))
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        setMargins(dp(4), dp(4), dp(4), dp(4))
+                    }
+                    setOnClickListener {
+                        feedback(it)
+                        fontStyle = idx
+                        prefs.edit().putInt("font", idx).apply()
+                        render()
+                    }
+                })
+            }
+            list.addView(r)
+        }
+        list.addView(hintText("Applies to English typing (EN mode)"))
+        root.addView(panelBody(list))
     }
 
     // ----- clipboard panel (card grid, like Gboard) -----
@@ -635,7 +940,8 @@ class RioBoardService : InputMethodService() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(4), dp(6), dp(4), dp(8))
         }
-        themes.withIndex().toList().chunked(4).forEach { items ->
+        val all = themes + customThemeObj()
+        all.withIndex().toList().chunked(5).forEach { items ->
             val r = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(
@@ -644,7 +950,16 @@ class RioBoardService : InputMethodService() {
                 )
             }
             items.forEach { (i, t) -> r.addView(swatch(i, t)) }
+            repeat(5 - items.size) {
+                r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+            }
             grid.addView(r)
+        }
+        if (themeIdx == themes.size) {
+            grid.addView(settingLabel("Custom background"))
+            grid.addView(paletteRow(customBgs, customBgIdx) { customBgIdx = it; saveCustom() })
+            grid.addView(settingLabel("Custom accent"))
+            grid.addView(paletteRow(customAccents, customAccIdx) { customAccIdx = it; saveCustom() })
         }
         root.addView(panelBody(grid))
     }
@@ -664,12 +979,12 @@ class RioBoardService : InputMethodService() {
                 setColor(t.key)
                 setStroke(dp(if (selected) 4 else 2), if (selected) t.accent else t.special)
             }
-            layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
+            layoutParams = LinearLayout.LayoutParams(dp(46), dp(46))
         }
         val label = TextView(this).apply {
             text = t.name
             setTextColor(th.text)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             gravity = Gravity.CENTER
             setPadding(0, dp(4), 0, 0)
         }
@@ -685,6 +1000,35 @@ class RioBoardService : InputMethodService() {
         return box
     }
 
+    private fun paletteRow(colors: List<String>, selected: Int, onPick: (Int) -> Unit): LinearLayout {
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46))
+        }
+        colors.forEachIndexed { i, hexColor ->
+            val sel = i == selected
+            val holder = LinearLayout(this).apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                setOnClickListener {
+                    feedback(it)
+                    onPick(i)
+                }
+            }
+            val dot = View(this).apply {
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.parseColor(hexColor))
+                    setStroke(dp(if (sel) 3 else 1), if (sel) th.accent else th.special)
+                }
+                layoutParams = LinearLayout.LayoutParams(dp(30), dp(30))
+            }
+            holder.addView(dot)
+            r.addView(holder)
+        }
+        return r
+    }
+
     // ----- settings panel -----
     private fun renderSettings() {
         root.addView(panelHeader("Settings"))
@@ -692,24 +1036,41 @@ class RioBoardService : InputMethodService() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(2), dp(8), dp(10))
         }
-        box.addView(settingLabel("Snow ❄"))
-        box.addView(chipRow(listOf("Off", "Keyboard", "Full screen"), snowMode) { setSnow(it) })
-        box.addView(settingLabel("Snow colour"))
+        box.addView(settingLabel("Effect"))
+        box.addView(chipRow(effectNames.subList(0, 3), effectIdx, 0) { setEffect(it) })
+        box.addView(chipRow(effectNames.subList(3, 6), effectIdx, 3) { setEffect(it) })
+        box.addView(settingLabel("Effect area"))
+        box.addView(chipRow(listOf("Off", "Keyboard", "Full screen"), snowMode, 0) { setSnow(it) })
+        box.addView(settingLabel("Effect colour"))
         box.addView(colorRow())
+        box.addView(settingLabel("Photo background"))
+        box.addView(twoButtons("Choose photo", {
+            val i = Intent(this, PickImageActivity::class.java)
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
+        }, "Remove photo", { removeBackground() }))
+        box.addView(settingLabel("One-handed mode"))
+        box.addView(chipRow(listOf("Off", "Left", "Right"), oneHand, 0) { setOneHand(it) })
         box.addView(settingLabel("Vibration"))
-        box.addView(chipRow(listOf("On", "Off"), if (haptic) 0 else 1) {
+        box.addView(chipRow(listOf("On", "Off"), if (haptic) 0 else 1, 0) {
             haptic = it == 0
             prefs.edit().putBoolean("haptic", haptic).apply()
             render()
         })
+        box.addView(settingLabel("Key sound (needs Touch sounds ON in phone settings)"))
+        box.addView(chipRow(listOf("Off", "On"), if (soundOn) 1 else 0, 0) {
+            soundOn = it == 1
+            prefs.edit().putBoolean("sound", soundOn).apply()
+            render()
+        })
         box.addView(settingLabel("Key height"))
-        box.addView(chipRow(listOf("Small", "Normal", "Large"), keyHIdx) {
+        box.addView(chipRow(listOf("Small", "Normal", "Large"), keyHIdx, 0) {
             keyHIdx = it
             prefs.edit().putInt("keyh", keyHIdx).apply()
             render()
         })
         box.addView(TextView(this).apply {
-            text = "Open RIO BOARD app"
+            text = "Open RIO BOARD app (text shortcuts)"
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
@@ -718,7 +1079,9 @@ class RioBoardService : InputMethodService() {
                 setMargins(dp(3), dp(14), dp(3), dp(4))
             }
             setOnClickListener {
-                startActivity(Intent(this@RioBoardService, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                val i = Intent(this@RioBoardService, MainActivity::class.java)
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(i)
             }
         })
         root.addView(panelBody(box))
@@ -729,6 +1092,31 @@ class RioBoardService : InputMethodService() {
         setTextColor(th.hint)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         setPadding(dp(4), dp(10), dp(4), dp(4))
+    }
+
+    private fun twoButtons(l1: String, a1: () -> Unit, l2: String, a2: () -> Unit): LinearLayout {
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42))
+        }
+        val pairs = listOf(Pair(l1, a1), Pair(l2, a2))
+        pairs.forEach { (label, action) ->
+            r.addView(TextView(this).apply {
+                text = label
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setTextColor(th.text)
+                background = roundBg(th.key, 12)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    setMargins(dp(3), dp(2), dp(3), dp(2))
+                }
+                setOnClickListener {
+                    feedback(it)
+                    action()
+                }
+            })
+        }
+        return r
     }
 
     private fun colorRow(): LinearLayout {
@@ -752,12 +1140,11 @@ class RioBoardService : InputMethodService() {
             val dot = TextView(this).apply {
                 gravity = Gravity.CENTER
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setTextColor(th.text)
                 text = if (i == 0) "A" else ""
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     when (name) {
-                        "auto" -> setColor(th.snow)
+                        "auto" -> setColor(Color.parseColor("#DDDDDD"))
                         "rainbow" -> {
                             setGradientType(GradientDrawable.SWEEP_GRADIENT)
                             setColors(rainbow)
@@ -766,7 +1153,7 @@ class RioBoardService : InputMethodService() {
                     }
                     setStroke(dp(if (sel) 3 else 1), if (sel) th.accent else th.special)
                 }
-                if (i == 0) setTextColor(Color.parseColor("#333333"))
+                setTextColor(Color.parseColor("#333333"))
                 layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
             }
             holder.addView(dot)
@@ -775,13 +1162,13 @@ class RioBoardService : InputMethodService() {
         return r
     }
 
-    private fun chipRow(options: List<String>, selected: Int, onSelect: (Int) -> Unit): LinearLayout {
+    private fun chipRow(options: List<String>, selected: Int, offset: Int, onSelect: (Int) -> Unit): LinearLayout {
         val r = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42))
         }
         options.forEachIndexed { i, label ->
-            val on = i == selected
+            val on = (i + offset) == selected
             r.addView(TextView(this).apply {
                 text = label
                 gravity = Gravity.CENTER
@@ -793,7 +1180,7 @@ class RioBoardService : InputMethodService() {
                 }
                 setOnClickListener {
                     feedback(it)
-                    onSelect(i)
+                    onSelect(i + offset)
                 }
             })
         }
@@ -811,7 +1198,7 @@ class RioBoardService : InputMethodService() {
             fun letters(s: String) = s.map { c ->
                 val label = if (upper) c.uppercaseChar().toString() else c.toString()
                 Key(label) {
-                    type(label)
+                    if (lang == 2) sgType(label) else type(Fonts.convert(label[0], fontStyle))
                     if (shift == 1) {
                         shift = 0
                         render()
@@ -834,7 +1221,7 @@ class RioBoardService : InputMethodService() {
                         Key("ABC", 1.5f, Style.SPECIAL, 14f) { symbols = false; render() }
                     else
                         Key("?123", 1.5f, Style.SPECIAL, 14f) { symbols = true; render() },
-                    Key("සිං", 1.3f, Style.SPECIAL, 14f) { siMode = true; symbols = false; render() },
+                    Key(langLabel(nextLang()), 1.3f, Style.SPECIAL, 14f) { setLang(nextLang()) },
                     Key(",") { type(",") },
                     spaceKey(4.5f),
                     Key(".") { type(".") },
@@ -869,7 +1256,7 @@ class RioBoardService : InputMethodService() {
         root.addView(
             row(
                 listOf(
-                    Key("ABC", 1.3f, Style.SPECIAL, 14f) { siMode = false; render() },
+                    Key("ABC", 1.3f, Style.SPECIAL, 14f) { setLang(0) },
                     Key(nextLabel, 1.3f, Style.ACTIVE, 20f) { siLayer = (siLayer + 1) % 3; render() },
                     Key(",") { type(",") },
                     spaceKey(4f),
@@ -882,7 +1269,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun spaceKey(weight: Float) = Key(
-        "RIO BOARD", weight, Style.NORMAL, 12f, space = true,
+        if (lang == 2) "RIO BOARD · Singlish" else "RIO BOARD", weight, Style.NORMAL, 12f, space = true,
         onLong = {
             (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
         }
@@ -939,7 +1326,66 @@ class RioBoardService : InputMethodService() {
         }
         tv.isClickable = true
 
-        if (k.repeat) {
+        val fx = when {
+            k.space -> AudioManager.FX_KEYPRESS_SPACEBAR
+            k.label == "⌫" -> AudioManager.FX_KEYPRESS_DELETE
+            k.label == "⏎" -> AudioManager.FX_KEYPRESS_RETURN
+            else -> AudioManager.FX_KEYPRESS_STANDARD
+        }
+
+        if (k.space) {
+            // tap = space, long press = keyboard picker, slide left/right = move cursor
+            val stepPx = dp(16).toFloat()
+            val pos = FloatArray(2)            // 0 = down x, 1 = last step x
+            val flags = BooleanArray(2)        // 0 = moved, 1 = long press fired
+            val longR = Runnable {
+                if (!flags[0]) {
+                    flags[1] = true
+                    k.onLong?.invoke()
+                }
+            }
+            tv.setOnTouchListener { view, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        pos[0] = ev.x
+                        pos[1] = ev.x
+                        flags[0] = false
+                        flags[1] = false
+                        view.isPressed = true
+                        handler.postDelayed(longR, 550)
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (!flags[0] && Math.abs(ev.x - pos[0]) > stepPx) {
+                            flags[0] = true
+                            handler.removeCallbacks(longR)
+                        }
+                        if (flags[0]) {
+                            while (ev.x - pos[1] >= stepPx) {
+                                pos[1] = pos[1] + stepPx
+                                moveCursor(1)
+                            }
+                            while (pos[1] - ev.x >= stepPx) {
+                                pos[1] = pos[1] - stepPx
+                                moveCursor(-1)
+                            }
+                        }
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        view.isPressed = false
+                        handler.removeCallbacks(longR)
+                        if (!flags[0] && !flags[1]) {
+                            feedback(view, fx)
+                            k.onPress()
+                        }
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        view.isPressed = false
+                        handler.removeCallbacks(longR)
+                    }
+                }
+                true
+            }
+        } else if (k.repeat) {
             val r = object : Runnable {
                 override fun run() {
                     k.onPress()
@@ -950,7 +1396,7 @@ class RioBoardService : InputMethodService() {
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         view.isPressed = true
-                        feedback(view)
+                        feedback(view, fx)
                         k.onPress()
                         handler.postDelayed(r, 400)
                     }
@@ -963,7 +1409,7 @@ class RioBoardService : InputMethodService() {
             }
         } else {
             tv.setOnClickListener {
-                feedback(it)
+                feedback(it, fx)
                 k.onPress()
             }
             val long = k.onLong
@@ -975,6 +1421,38 @@ class RioBoardService : InputMethodService() {
             }
         }
         return tv
+    }
+
+    // ---------- Singlish composing ----------
+    private fun sgReset() {
+        sgBuf.setLength(0)
+        sgShown = ""
+    }
+
+    private fun sgStillThere(ic: InputConnection): Boolean {
+        if (sgShown.isEmpty()) return true
+        val before = ic.getTextBeforeCursor(sgShown.length, 0)?.toString() ?: return false
+        return before == sgShown
+    }
+
+    /** Replace what is shown for the current Singlish word with the conversion of [newRaw]. */
+    private fun sgReplace(ic: InputConnection, newRaw: String) {
+        val conv = Singlish.convert(newRaw)
+        ic.beginBatchEdit()
+        if (sgShown.isNotEmpty()) ic.deleteSurroundingText(sgShown.length, 0)
+        if (conv.isNotEmpty()) ic.commitText(conv, 1)
+        ic.endBatchEdit()
+        sgBuf.setLength(0)
+        sgBuf.append(newRaw)
+        sgShown = conv
+    }
+
+    private fun sgType(ch: String) {
+        val ic = currentInputConnection ?: return
+        toolsPinned = false
+        if (sgBuf.isNotEmpty() && !sgStillThere(ic)) sgReset()
+        sgReplace(ic, sgBuf.toString() + ch)
+        if (::snow.isInitialized) snow.burst()
     }
 
     // ---------- word suggestions ----------
@@ -1021,6 +1499,7 @@ class RioBoardService : InputMethodService() {
         ic.deleteSurroundingText(prefix.length, 0)
         ic.commitText("$word ", 1)
         ic.endBatchEdit()
+        sgReset()
         learn(word)
         suggestions = emptyList()
         refreshBar()
@@ -1035,6 +1514,12 @@ class RioBoardService : InputMethodService() {
             learned.entries.sortedBy { it.value }.take(100).map { it.key }.forEach { learned.remove(it) }
         }
         prefs.edit().putString("learned", JSONObject(learned.toMap()).toString()).apply()
+    }
+
+    private fun shortcutFor(word: String): String? {
+        val o = Snips.load(prefs)
+        val k = word.lowercase()
+        return if (o.has(k)) o.optString(k, "") else null
     }
 
     // ---------- clipboard ----------
@@ -1071,20 +1556,38 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun menuAction(id: Int) {
+        sgReset()
         currentInputConnection?.performContextMenuAction(id)
         if (id == android.R.id.copy || id == android.R.id.cut) {
             handler.postDelayed({ captureClip() }, 150)
         }
     }
 
+    private fun moveCursor(dir: Int) {
+        sgReset()
+        sendDownUpKeyEvents(if (dir > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT)
+    }
+
     // ---------- input actions ----------
     private fun type(s: String) {
-        val ic = currentInputConnection
+        sgReset()
         toolsPinned = false
-        // a space/punctuation ends a word -> remember it for suggestions
+        val ic = currentInputConnection
+        // a space/punctuation ends a word: remember it, and expand text shortcuts
         if (s.length == 1 && !isWordChar(s[0])) {
             val w = currentPrefix()
             if (w.length >= 3) learn(w)
+            if (s == " " && w.isNotEmpty() && ic != null) {
+                val ex = shortcutFor(w)
+                if (!ex.isNullOrEmpty()) {
+                    ic.beginBatchEdit()
+                    ic.deleteSurroundingText(w.length, 0)
+                    ic.commitText("$ex ", 1)
+                    ic.endBatchEdit()
+                    if (::snow.isInitialized) snow.burst()
+                    return
+                }
+            }
         }
         ic?.commitText(s, 1)
         if (::snow.isInitialized) snow.burst()
@@ -1092,20 +1595,29 @@ class RioBoardService : InputMethodService() {
 
     private fun deleteOne() {
         val ic = currentInputConnection ?: return
+        if (sgBuf.isNotEmpty()) {
+            if (sgStillThere(ic)) {
+                sgReplace(ic, sgBuf.substring(0, sgBuf.length - 1))
+                return
+            }
+            sgReset()
+        }
         val sel = ic.getSelectedText(0)
         if (!sel.isNullOrEmpty()) {
             ic.commitText("", 1)
             return
         }
-        val before = ic.getTextBeforeCursor(1, 0)
+        val before = ic.getTextBeforeCursor(2, 0)
         if (before.isNullOrEmpty()) {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
-        } else {
-            ic.deleteSurroundingText(1, 0)
+            return
         }
+        val n = if (before.length == 2 && Character.isHighSurrogate(before[0]) && Character.isLowSurrogate(before[1])) 2 else 1
+        ic.deleteSurroundingText(n, 0)
     }
 
     private fun pressEnter() {
+        sgReset()
         val ei = currentInputEditorInfo
         if (ei == null) {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
