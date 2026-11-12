@@ -1,5 +1,8 @@
 package com.rio.board
 
+import android.content.ClipboardManager
+import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -8,6 +11,7 @@ import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -17,8 +21,11 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import org.json.JSONArray
 
 class RioBoardService : InputMethodService() {
 
@@ -35,22 +42,50 @@ class RioBoardService : InputMethodService() {
         val onPress: () -> Unit
     )
 
+    private class Theme(
+        val name: String,
+        bgS: String, keyS: String, specialS: String, accentS: String,
+        activeS: String, pressedS: String, textS: String, hintS: String, snowS: String
+    ) {
+        val bg = Color.parseColor(bgS)
+        val key = Color.parseColor(keyS)
+        val special = Color.parseColor(specialS)
+        val accent = Color.parseColor(accentS)
+        val active = Color.parseColor(activeS)
+        val pressed = Color.parseColor(pressedS)
+        val text = Color.parseColor(textS)
+        val hint = Color.parseColor(hintS)
+        val snow = Color.parseColor(snowS)
+    }
+
+    private val themes = listOf(
+        Theme("Dark", "#17181C", "#2B2D35", "#3A3D49", "#3B82F6", "#6D5BD0", "#5A5F73", "#FFFFFF", "#9AA3C0", "#FFFFFF"),
+        Theme("Midnight", "#0B1026", "#18204A", "#232C63", "#00B4D8", "#7B2CBF", "#3A4690", "#FFFFFF", "#8FA3FF", "#DDEBFF"),
+        Theme("Forest", "#0F1F17", "#1C3A2A", "#26503A", "#2ECC71", "#F39C12", "#3F7A58", "#FFFFFF", "#9BD6B0", "#FFFFFF"),
+        Theme("Rose", "#2A1220", "#4A2038", "#63304D", "#FF4D8D", "#B84DFF", "#8A3F67", "#FFFFFF", "#F5A9CC", "#FFE8F2"),
+        Theme("Light", "#E8EAF0", "#FFFFFF", "#C9CEDB", "#3B82F6", "#7C6CE0", "#B8BFD3", "#111111", "#5B6382", "#8FB8FF")
+    )
+
     // ---------- state ----------
     private var siMode = false        // false = English, true = Sinhala
     private var shift = 0             // 0 off, 1 once, 2 caps lock
     private var symbols = false
     private var siLayer = 0           // 0 consonants, 1 vowels, 2 pili/signs
     private var lastShiftTap = 0L
-    private lateinit var root: LinearLayout
-    private val handler = Handler(Looper.getMainLooper())
+    private var themeIdx = 0
+    private var snowMode = 1          // 0 off, 1 keyboard area, 2 full screen
+    private var clipOpen = false
+    private val clips = ArrayList<String>()
 
-    // ---------- colors ----------
-    private val cBg = Color.parseColor("#17181C")
-    private val cKey = Color.parseColor("#2B2D35")
-    private val cSpecial = Color.parseColor("#3A3D49")
-    private val cAccent = Color.parseColor("#3B82F6")
-    private val cActive = Color.parseColor("#6D5BD0")
-    private val cPressed = Color.parseColor("#5A5F73")
+    private lateinit var prefs: SharedPreferences
+    private lateinit var cm: ClipboardManager
+    private lateinit var frame: FrameLayout
+    private lateinit var root: LinearLayout
+    private lateinit var snow: SnowView
+    private val handler = Handler(Looper.getMainLooper())
+    private val th: Theme get() = themes[themeIdx]
+
+    private val clipListener = ClipboardManager.OnPrimaryClipChangedListener { captureClip() }
 
     // ---------- Sinhala layers ----------
     private fun split(vararg rows: String): List<List<String>> =
@@ -64,30 +99,200 @@ class RioBoardService : InputMethodService() {
     )
 
     // ---------- lifecycle ----------
+    override fun onCreate() {
+        super.onCreate()
+        prefs = getSharedPreferences("rio_board", MODE_PRIVATE)
+        themeIdx = prefs.getInt("theme", 0).coerceIn(0, themes.size - 1)
+        snowMode = prefs.getInt("snow", 1).coerceIn(0, 2)
+        try {
+            val arr = JSONArray(prefs.getString("clips", "[]"))
+            for (i in 0 until arr.length()) clips.add(arr.getString(i))
+        } catch (e: Exception) {
+        }
+        cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        cm.addPrimaryClipChangedListener(clipListener)
+    }
+
+    override fun onDestroy() {
+        cm.removePrimaryClipChangedListener(clipListener)
+        super.onDestroy()
+    }
+
     override fun onCreateInputView(): View {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(cBg)
-            setPadding(dp(3), dp(6), dp(3), dp(6))
+            setPadding(dp(3), dp(4), dp(3), dp(6))
         }
+        snow = SnowView(this)
+        frame = FrameLayout(this)
+        frame.addView(
+            root,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            )
+        )
+        frame.addView(
+            snow,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
         render()
-        return root
+        applySnow()
+        return frame
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         if (!::root.isInitialized) return
         if (shift == 1) shift = 0
+        clipOpen = false
+        captureClip()
         render()
+        applySnow()
     }
 
     override fun onEvaluateFullscreenMode(): Boolean = false
 
+    // In full-screen snow mode only the keyboard part is touchable;
+    // touches on the snow area pass through to the app below.
+    override fun onComputeInsets(outInsets: InputMethodService.Insets) {
+        super.onComputeInsets(outInsets)
+        if (snowMode == 2 && ::root.isInitialized && root.height > 0) {
+            val loc = IntArray(2)
+            root.getLocationInWindow(loc)
+            val top = loc[1]
+            outInsets.contentTopInsets = top
+            outInsets.visibleTopInsets = top
+            outInsets.touchableInsets = InputMethodService.Insets.TOUCHABLE_INSETS_REGION
+            outInsets.touchableRegion.set(loc[0], top, loc[0] + root.width, top + root.height)
+        }
+    }
+
+    // ---------- snow ----------
+    private fun applySnow() {
+        if (!::snow.isInitialized || !::frame.isInitialized) return
+        snow.color = th.snow
+        snow.running = snowMode != 0
+        val lp = frame.layoutParams
+        if (lp != null) {
+            val h = if (snowMode == 2) resources.displayMetrics.heightPixels
+            else ViewGroup.LayoutParams.WRAP_CONTENT
+            if (lp.height != h) {
+                lp.height = h
+                frame.layoutParams = lp
+            }
+        }
+    }
+
     // ---------- rendering ----------
     private fun render() {
         root.removeAllViews()
+        root.setBackgroundColor(th.bg)
+        root.addView(toolbar())
+        if (clipOpen) {
+            renderClipboard()
+            return
+        }
         root.addView(row(chars("1234567890")))
         if (siMode) renderSinhala() else renderEnglish()
+    }
+
+    private fun toolbar(): LinearLayout {
+        val snowKey = Key(
+            if (snowMode == 2) "❄+" else "❄", 1f,
+            when (snowMode) {
+                0 -> Style.SPECIAL
+                1 -> Style.ACTIVE
+                else -> Style.ACCENT
+            }, 15f
+        ) {
+            snowMode = (snowMode + 1) % 3
+            prefs.edit().putInt("snow", snowMode).apply()
+            applySnow()
+            render()
+        }
+        val keys = listOf(
+            Key("📋", 1f, Style.SPECIAL, 16f) { pasteNow() },
+            Key("🕘", 1f, Style.SPECIAL, 16f) { clipOpen = true; render() },
+            Key("All", 1f, Style.SPECIAL, 13f) { menuAction(android.R.id.selectAll) },
+            Key("Copy", 1.2f, Style.SPECIAL, 12f) { menuAction(android.R.id.copy) },
+            Key("Cut", 1f, Style.SPECIAL, 13f) { menuAction(android.R.id.cut) },
+            snowKey,
+            Key("🎨", 1f, Style.SPECIAL, 16f) {
+                themeIdx = (themeIdx + 1) % themes.size
+                prefs.edit().putInt("theme", themeIdx).apply()
+                applySnow()
+                render()
+            },
+            Key("⚙", 1f, Style.SPECIAL, 16f) {
+                val i = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(i)
+            }
+        )
+        return row(keys, h = 42)
+    }
+
+    private fun renderClipboard() {
+        root.addView(
+            row(
+                listOf(
+                    Key("←", 1f, Style.SPECIAL) { clipOpen = false; render() },
+                    Key("Clipboard", 4f, Style.NORMAL, 15f) { },
+                    Key("Clear", 1.6f, Style.SPECIAL, 14f) {
+                        clips.clear()
+                        saveClips()
+                        render()
+                    }
+                )
+            )
+        )
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(200))
+        }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        if (clips.isEmpty()) {
+            list.addView(TextView(this).apply {
+                text = "Clipboard හිස්. Text එකක් copy කළාම මෙතන පෙනෙනවා."
+                setTextColor(th.hint)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                setPadding(dp(12), dp(16), dp(12), dp(16))
+            })
+        } else {
+            clips.toList().forEach { list.addView(clipItem(it)) }
+        }
+        scroll.addView(list)
+        root.addView(scroll)
+    }
+
+    private fun clipItem(text: String): View {
+        val tv = TextView(this)
+        tv.text = text
+        tv.maxLines = 2
+        tv.ellipsize = TextUtils.TruncateAt.END
+        tv.setTextColor(th.text)
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        tv.setPadding(dp(12), dp(10), dp(12), dp(10))
+        tv.background = bg(th.key)
+        tv.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+        tv.setOnClickListener {
+            type(text)
+            clipOpen = false
+            render()
+        }
+        tv.setOnLongClickListener {
+            clips.remove(text)
+            saveClips()
+            render()
+            true
+        }
+        return tv
     }
 
     private fun renderEnglish() {
@@ -98,9 +303,9 @@ class RioBoardService : InputMethodService() {
         } else {
             val upper = shift != 0
             fun letters(s: String) = s.map { c ->
-                val t = if (upper) c.uppercaseChar().toString() else c.toString()
-                Key(t) {
-                    type(t)
+                val label = if (upper) c.uppercaseChar().toString() else c.toString()
+                Key(label) {
+                    type(label)
                     if (shift == 1) {
                         shift = 0
                         render()
@@ -182,10 +387,10 @@ class RioBoardService : InputMethodService() {
     // ---------- view helpers ----------
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
-    private fun row(keys: List<Key>, pad: Float = 0f): LinearLayout {
+    private fun row(keys: List<Key>, pad: Float = 0f, h: Int = 50): LinearLayout {
         val r = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(50))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(h))
         }
         if (pad > 0f) r.addView(spacer(pad))
         keys.forEach { r.addView(keyView(it)) }
@@ -203,7 +408,7 @@ class RioBoardService : InputMethodService() {
             setColor(c)
         }
         return StateListDrawable().apply {
-            addState(intArrayOf(android.R.attr.state_pressed), shape(cPressed))
+            addState(intArrayOf(android.R.attr.state_pressed), shape(th.pressed))
             addState(intArrayOf(), shape(color))
         }
     }
@@ -215,17 +420,23 @@ class RioBoardService : InputMethodService() {
         tv.maxLines = 1
         tv.includeFontPadding = false
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, k.textSp)
-        tv.setTextColor(if (k.space) Color.parseColor("#9AA3C0") else Color.WHITE)
+        tv.setTextColor(
+            when {
+                k.space -> th.hint
+                k.style == Style.ACCENT || k.style == Style.ACTIVE -> Color.WHITE
+                else -> th.text
+            }
+        )
         if (k.space) {
             tv.letterSpacing = 0.2f
             tv.typeface = Typeface.DEFAULT_BOLD
         }
         tv.background = bg(
             when (k.style) {
-                Style.NORMAL -> cKey
-                Style.SPECIAL -> cSpecial
-                Style.ACCENT -> cAccent
-                Style.ACTIVE -> cActive
+                Style.NORMAL -> th.key
+                Style.SPECIAL -> th.special
+                Style.ACCENT -> th.accent
+                Style.ACTIVE -> th.active
             }
         )
         tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, k.weight).apply {
@@ -271,9 +482,50 @@ class RioBoardService : InputMethodService() {
         return tv
     }
 
+    // ---------- clipboard ----------
+    private fun captureClip() {
+        try {
+            val clip = cm.primaryClip ?: return
+            if (clip.itemCount == 0) return
+            val text = clip.getItemAt(0).coerceToText(this)?.toString() ?: return
+            if (text.isBlank()) return
+            if (clips.isNotEmpty() && clips[0] == text) return
+            clips.remove(text)
+            clips.add(0, text)
+            while (clips.size > 20) clips.removeAt(clips.size - 1)
+            saveClips()
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun saveClips() {
+        val arr = JSONArray()
+        clips.forEach { arr.put(it) }
+        prefs.edit().putString("clips", arr.toString()).apply()
+    }
+
+    private fun pasteNow() {
+        captureClip()
+        val text = try {
+            cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()
+        } catch (e: Exception) {
+            null
+        }
+        val s = if (!text.isNullOrEmpty()) text else clips.firstOrNull()
+        if (!s.isNullOrEmpty()) type(s)
+    }
+
+    private fun menuAction(id: Int) {
+        currentInputConnection?.performContextMenuAction(id)
+        if (id == android.R.id.copy || id == android.R.id.cut) {
+            handler.postDelayed({ captureClip() }, 150)
+        }
+    }
+
     // ---------- input actions ----------
     private fun type(s: String) {
         currentInputConnection?.commitText(s, 1)
+        if (::snow.isInitialized) snow.burst()
     }
 
     private fun deleteOne() {
