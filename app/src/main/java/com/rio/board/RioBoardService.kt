@@ -3,10 +3,14 @@ package com.rio.board
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.StateListDrawable
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
@@ -29,11 +33,18 @@ import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 class RioBoardService : InputMethodService() {
 
+    companion object {
+        /** Lets VoiceActivity / PickImageActivity talk to the running keyboard. */
+        @Volatile
+        var instance: RioBoardService? = null
+    }
+
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS }
 
     private class Key(
         val label: String,
@@ -114,6 +125,15 @@ class RioBoardService : InputMethodService() {
     private var suggestions: List<String> = emptyList()
     private val clips = ArrayList<String>()
     private val learned = HashMap<String, Int>()
+    private var singlishOn = false     // English keys -> Sinhala letters
+    private val sbuf = StringBuilder() // raw Singlish letters being composed
+    private var lastComposeMs = 0L
+    private var fontStyle = 0          // 0 = normal, see Fonts.names
+    private var snips = JSONObject()
+    private var bgOn = false
+    private var bgBitmap: Bitmap? = null
+    private var pendingVoice: String? = null
+    private var pendingVoiceAt = 0L
 
     private val keyHs = intArrayOf(44, 50, 56)
     private val keyH: Int get() = keyHs[keyHIdx]
@@ -150,6 +170,10 @@ class RioBoardService : InputMethodService() {
         snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
         haptic = prefs.getBoolean("haptic", true)
         keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
+        singlishOn = prefs.getBoolean("singlish", false)
+        snips = Snips.load(prefs)
+        loadBackground()
+        instance = this
         try {
             val arr = JSONArray(prefs.getString("clips", "[]"))
             for (i in 0 until arr.length()) clips.add(arr.getString(i))
@@ -166,6 +190,7 @@ class RioBoardService : InputMethodService() {
 
     override fun onDestroy() {
         cm.removePrimaryClipChangedListener(clipListener)
+        if (instance === this) instance = null
         super.onDestroy()
     }
 
@@ -209,7 +234,10 @@ class RioBoardService : InputMethodService() {
         if (shift == 1) shift = 0
         panel = Panel.NONE
         toolsPinned = false
+        sbuf.clear()
+        snips = Snips.load(prefs)
         captureClip()
+        flushPendingVoice()
         suggestions = computeSuggestions()
         render()
         applySnow()
@@ -220,6 +248,18 @@ class RioBoardService : InputMethodService() {
         candidatesStart: Int, candidatesEnd: Int
     ) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        // the user moved the cursor away from the Singlish word -> stop composing it
+        if (sbuf.isNotEmpty()) {
+            val moved = if (candidatesStart >= 0) {
+                newSelStart != candidatesEnd || newSelEnd != candidatesEnd
+            } else {
+                SystemClock.uptimeMillis() - lastComposeMs > 400
+            }
+            if (moved) {
+                sbuf.clear()
+                currentInputConnection?.finishComposingText()
+            }
+        }
         updateSuggestions()
     }
 
@@ -294,7 +334,7 @@ class RioBoardService : InputMethodService() {
     // ---------- rendering ----------
     private fun render() {
         root.removeAllViews()
-        root.setBackgroundColor(th.bg)
+        applyRootBg()
         root.addView(barHolder)
         refreshBar()
         when (panel) {
@@ -302,6 +342,8 @@ class RioBoardService : InputMethodService() {
             Panel.THEME -> renderTheme()
             Panel.SETTINGS -> renderSettings()
             Panel.EMOJI -> renderEmoji()
+            Panel.FONTS -> renderFonts()
+            Panel.SNIPS -> renderSnips()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -334,10 +376,33 @@ class RioBoardService : InputMethodService() {
             }
             bar.addView(b)
         }
+        fun addText(label: String, sp: Float, active: Boolean, onClick: () -> Unit) {
+            val b = TextView(this).apply {
+                text = label
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (active) th.accent else th.text)
+                background = flatBg()
+                isClickable = true
+                setOnClickListener {
+                    feedback(it)
+                    onClick()
+                }
+                layoutParams = LinearLayout.LayoutParams(dp(46), ViewGroup.LayoutParams.MATCH_PARENT).apply {
+                    setMargins(dp(1), dp(2), dp(1), dp(2))
+                }
+            }
+            bar.addView(b)
+        }
         add(IconView.Kind.CLIPBOARD) { pasteNow() }
         add(IconView.Kind.HISTORY, panel == Panel.CLIPBOARD) { togglePanel(Panel.CLIPBOARD) }
         add(IconView.Kind.EMOJI, panel == Panel.EMOJI) { togglePanel(Panel.EMOJI) }
-        add(IconView.Kind.GLOBE) { siMode = !siMode; symbols = false; panel = Panel.NONE; render() }
+        add(IconView.Kind.GLOBE) { flushSinglish(); siMode = !siMode; symbols = false; panel = Panel.NONE; render() }
+        addText("A→අ", 13f, singlishOn) { setSinglish(!singlishOn) }
+        addText("🎤", 18f, false) { startVoice() }
+        addText("Aa", 16f, fontStyle != 0 || panel == Panel.FONTS) { togglePanel(Panel.FONTS) }
+        addText("⚡", 18f, panel == Panel.SNIPS) { togglePanel(Panel.SNIPS) }
         add(IconView.Kind.UNDO) { menuAction(android.R.id.undo) }
         add(IconView.Kind.REDO) { menuAction(android.R.id.redo) }
         add(IconView.Kind.LEFT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) }
@@ -403,6 +468,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun togglePanel(p: Panel) {
+        flushSinglish()
         panel = if (panel == p) Panel.NONE else p
         render()
     }
@@ -437,7 +503,7 @@ class RioBoardService : InputMethodService() {
     private fun roundBg(color: Int, radiusDp: Int): StateListDrawable {
         fun shape(c: Int) = GradientDrawable().apply {
             cornerRadius = dp(radiusDp).toFloat()
-            setColor(c)
+            setColor(kc(c))
         }
         return StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_pressed), shape(th.pressed))
@@ -708,6 +774,19 @@ class RioBoardService : InputMethodService() {
             prefs.edit().putInt("keyh", keyHIdx).apply()
             render()
         })
+        box.addView(settingLabel("Typing"))
+        box.addView(chipRow(listOf("English", "Singlish → සිංහල"), if (singlishOn) 1 else 0) { setSinglish(it == 1) })
+        box.addView(settingLabel("Background photo"))
+        box.addView(chipRow(listOf("Choose photo", "Remove"), -1) {
+            if (it == 0) {
+                try {
+                    startActivity(Intent(this@RioBoardService, PickImageActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (e: Exception) {
+                }
+            } else {
+                removeBackground()
+            }
+        })
         box.addView(TextView(this).apply {
             text = "Open RIO BOARD app"
             gravity = Gravity.CENTER
@@ -811,7 +890,7 @@ class RioBoardService : InputMethodService() {
             fun letters(s: String) = s.map { c ->
                 val label = if (upper) c.uppercaseChar().toString() else c.toString()
                 Key(label) {
-                    type(label)
+                    typeLetter(label)
                     if (shift == 1) {
                         shift = 0
                         render()
@@ -831,10 +910,12 @@ class RioBoardService : InputMethodService() {
             row(
                 listOf(
                     if (symbols)
-                        Key("ABC", 1.5f, Style.SPECIAL, 14f) { symbols = false; render() }
+                        Key("ABC", 1.5f, Style.SPECIAL, 14f) { flushSinglish(); symbols = false; render() }
                     else
-                        Key("?123", 1.5f, Style.SPECIAL, 14f) { symbols = true; render() },
-                    Key("සිං", 1.3f, Style.SPECIAL, 14f) { siMode = true; symbols = false; render() },
+                        Key("?123", 1.5f, Style.SPECIAL, 14f) { flushSinglish(); symbols = true; render() },
+                    Key("සිං", 1.3f, Style.SPECIAL, 14f, onLong = { setSinglish(!singlishOn) }) {
+                        flushSinglish(); siMode = true; symbols = false; render()
+                    },
                     Key(",") { type(",") },
                     spaceKey(4.5f),
                     Key(".") { type(".") },
@@ -882,13 +963,13 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun spaceKey(weight: Float) = Key(
-        "RIO BOARD", weight, Style.NORMAL, 12f, space = true,
+        spaceLabel(), weight, Style.NORMAL, 12f, space = true,
         onLong = {
             (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
         }
     ) { type(" ") }
 
-    private fun chars(s: String) = s.map { c -> Key(c.toString()) { type(c.toString()) } }
+    private fun chars(s: String) = s.map { c -> Key(c.toString()) { type(styled(c.toString())) } }
 
     // ---------- view helpers ----------
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -989,6 +1070,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun computeSuggestions(): List<String> {
+        if (fontStyle != 0) return emptyList()
         val prefix = currentPrefix()
         if (prefix.isEmpty()) return emptyList()
         val lower = prefix.lowercase()
@@ -1016,6 +1098,7 @@ class RioBoardService : InputMethodService() {
 
     private fun pickSuggestion(word: String) {
         val ic = currentInputConnection ?: return
+        flushSinglish()
         val prefix = currentPrefix()
         ic.beginBatchEdit()
         ic.deleteSurroundingText(prefix.length, 0)
@@ -1081,6 +1164,16 @@ class RioBoardService : InputMethodService() {
     private fun type(s: String) {
         val ic = currentInputConnection
         toolsPinned = false
+        if (sbuf.isNotEmpty()) {
+            // Singlish word in progress: a shortcut can still match its raw letters
+            if (s == " " && expandSnip(sbuf.toString(), true)) {
+                sbuf.clear()
+                return
+            }
+            flushSinglish()
+        } else if (s == " " && fontStyle == 0 && expandSnip(currentPrefix(), false)) {
+            return
+        }
         // a space/punctuation ends a word -> remember it for suggestions
         if (s.length == 1 && !isWordChar(s[0])) {
             val w = currentPrefix()
@@ -1092,20 +1185,37 @@ class RioBoardService : InputMethodService() {
 
     private fun deleteOne() {
         val ic = currentInputConnection ?: return
+        if (sbuf.isNotEmpty()) {
+            sbuf.deleteCharAt(sbuf.length - 1)
+            lastComposeMs = SystemClock.uptimeMillis()
+            if (sbuf.isEmpty()) {
+                ic.setComposingText("", 1)
+                ic.finishComposingText()
+            } else {
+                ic.setComposingText(Singlish.convert(sbuf.toString()), 1)
+            }
+            return
+        }
         val sel = ic.getSelectedText(0)
         if (!sel.isNullOrEmpty()) {
             ic.commitText("", 1)
             return
         }
-        val before = ic.getTextBeforeCursor(1, 0)
+        val before = ic.getTextBeforeCursor(2, 0)
         if (before.isNullOrEmpty()) {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
         } else {
-            ic.deleteSurroundingText(1, 0)
+            // emoji and styled letters are 2 UTF-16 units: delete them whole
+            val n = if (before.length >= 2 &&
+                Character.isLowSurrogate(before[before.length - 1]) &&
+                Character.isHighSurrogate(before[before.length - 2])
+            ) 2 else 1
+            ic.deleteSurroundingText(n, 0)
         }
     }
 
     private fun pressEnter() {
+        flushSinglish()
         val ei = currentInputEditorInfo
         if (ei == null) {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)
@@ -1133,4 +1243,235 @@ class RioBoardService : InputMethodService() {
         lastShiftTap = now
         render()
     }
+
+    // ---------- Singlish: English keys -> Sinhala letters ----------
+    private fun setSinglish(on: Boolean) {
+        flushSinglish()
+        singlishOn = on
+        if (on) {
+            siMode = false
+            symbols = false
+            fontStyle = 0
+        }
+        prefs.edit().putBoolean("singlish", on).apply()
+        suggestions = emptyList()
+        render()
+    }
+
+    private fun typeLetter(label: String) {
+        if (singlishOn) {
+            toolsPinned = false
+            sbuf.append(label)
+            lastComposeMs = SystemClock.uptimeMillis()
+            currentInputConnection?.setComposingText(Singlish.convert(sbuf.toString()), 1)
+            if (::snow.isInitialized) snow.burst()
+        } else {
+            type(styled(label))
+        }
+    }
+
+    /** Commit the Singlish word that is still being composed. */
+    private fun flushSinglish() {
+        if (sbuf.isEmpty()) return
+        currentInputConnection?.commitText(Singlish.convert(sbuf.toString()), 1)
+        sbuf.clear()
+    }
+
+    private fun styled(s: String): String =
+        if (fontStyle == 0 || singlishOn || s.length != 1) s else Fonts.convert(s[0], fontStyle)
+
+    private fun spaceLabel(): String = when {
+        fontStyle != 0 && !siMode -> Fonts.names[fontStyle]
+        singlishOn && !siMode -> "සිංහල · Singlish"
+        else -> "RIO BOARD"
+    }
+
+    // ---------- shortcuts ("gm" + space -> "Good morning") ----------
+    private fun expandSnip(key: String, composing: Boolean): Boolean {
+        if (key.isEmpty()) return false
+        val v = snips.optString(key.lowercase(), "")
+        if (v.isEmpty()) return false
+        val ic = currentInputConnection ?: return false
+        ic.beginBatchEdit()
+        if (!composing) ic.deleteSurroundingText(key.length, 0)
+        ic.commitText("$v ", 1)
+        ic.endBatchEdit()
+        if (::snow.isInitialized) snow.burst()
+        return true
+    }
+
+    private fun openApp() {
+        try {
+            startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun renderSnips() {
+        root.addView(panelHeader("Shortcuts", IconView.Kind.SETTINGS) { openApp() })
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(2), dp(4), dp(8))
+        }
+        val keys = snips.keys().asSequence().toList().sorted()
+        keys.forEach { k ->
+            val v = snips.optString(k, "")
+            list.addView(TextView(this).apply {
+                text = "$k  →  $v"
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+                setTextColor(th.text)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                minHeight = dp(46)
+                background = roundBg(th.key, 12)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(dp(4), dp(3), dp(4), dp(3)) }
+                setOnClickListener {
+                    feedback(it)
+                    type(v)
+                    panel = Panel.NONE
+                    render()
+                }
+                setOnLongClickListener {
+                    snips.remove(k)
+                    Snips.save(prefs, snips)
+                    render()
+                    true
+                }
+            })
+        }
+        list.addView(
+            hintText(
+                if (keys.isEmpty()) "No shortcuts yet. Tap ⚙ above to add some."
+                else "Type the shortcut + Space to expand it.\nTap = insert  ·  Long press = delete  ·  ⚙ = add new"
+            )
+        )
+        root.addView(panelBody(list))
+    }
+
+    // ---------- fancy fonts ----------
+    private fun renderFonts() {
+        root.addView(panelHeader("Fonts"))
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(2), dp(4), dp(8))
+        }
+        Fonts.names.forEachIndexed { i, name ->
+            val on = i == fontStyle
+            val r = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), 0, dp(14), 0)
+                background = roundBg(if (on) th.accent else th.key, 12)
+                isClickable = true
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
+                    setMargins(dp(4), dp(3), dp(4), dp(3))
+                }
+                setOnClickListener {
+                    feedback(it)
+                    fontStyle = i
+                    if (i != 0 && singlishOn) {
+                        singlishOn = false
+                        prefs.edit().putBoolean("singlish", false).apply()
+                    }
+                    suggestions = emptyList()
+                    panel = Panel.NONE
+                    render()
+                }
+            }
+            r.addView(TextView(this).apply {
+                text = name
+                setTextColor(if (on) Color.WHITE else th.hint)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            r.addView(TextView(this).apply {
+                text = Fonts.sample(i)
+                setTextColor(if (on) Color.WHITE else th.text)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                maxLines = 1
+            })
+            list.addView(r)
+        }
+        list.addView(hintText("Works for English letters and numbers. Pick Normal to turn it off."))
+        root.addView(panelBody(list))
+    }
+
+    // ---------- voice typing ----------
+    private fun startVoice() {
+        flushSinglish()
+        try {
+            val i = Intent(this, VoiceActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra("si", siMode || singlishOn)
+            startActivity(i)
+        } catch (e: Exception) {
+        }
+    }
+
+    /** Called by VoiceActivity. The text goes in once the keyboard is back in the app's text box. */
+    fun voiceResult(text: String) {
+        pendingVoice = text
+        pendingVoiceAt = SystemClock.uptimeMillis()
+        handler.postDelayed({ flushPendingVoice() }, 400)
+    }
+
+    private fun flushPendingVoice() {
+        val t = pendingVoice ?: return
+        if (SystemClock.uptimeMillis() - pendingVoiceAt > 20000) {
+            pendingVoice = null
+            return
+        }
+        val ic = currentInputConnection ?: return
+        pendingVoice = null
+        ic.commitText("$t ", 1)
+    }
+
+    // ---------- background photo ----------
+    private fun loadBackground() {
+        bgOn = prefs.getBoolean("bgon", false)
+        bgBitmap = null
+        if (bgOn) {
+            try {
+                val f = File(filesDir, "kb_bg.jpg")
+                if (f.exists()) bgBitmap = BitmapFactory.decodeFile(f.path)
+            } catch (e: Exception) {
+            } catch (e: OutOfMemoryError) {
+            }
+            if (bgBitmap == null) bgOn = false
+        }
+    }
+
+    /** Called by PickImageActivity after a new photo was saved. */
+    fun reloadBackground() {
+        loadBackground()
+        if (::root.isInitialized) render()
+    }
+
+    private fun removeBackground() {
+        prefs.edit().putBoolean("bgon", false).apply()
+        try {
+            File(filesDir, "kb_bg.jpg").delete()
+        } catch (e: Exception) {
+        }
+        reloadBackground()
+    }
+
+    private fun applyRootBg() {
+        val bmp = bgBitmap
+        if (bgOn && bmp != null) {
+            // photo + a see-through layer of the theme colour so keys stay readable
+            val scrim = ColorDrawable((th.bg and 0x00FFFFFF) or (0x88 shl 24))
+            root.background = LayerDrawable(arrayOf<Drawable>(CropDrawable(bmp), scrim))
+        } else {
+            root.setBackgroundColor(th.bg)
+        }
+    }
+
+    /** Make opaque key colours slightly see-through when a photo is behind them. */
+    private fun kc(c: Int): Int =
+        if (bgOn && bgBitmap != null && Color.alpha(c) == 255) (c and 0x00FFFFFF) or (0xCC shl 24) else c
 }
