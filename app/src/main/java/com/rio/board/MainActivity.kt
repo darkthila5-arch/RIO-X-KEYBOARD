@@ -23,6 +23,7 @@ class MainActivity : Activity() {
 
     private lateinit var prefs: SharedPreferences
     private lateinit var snipList: LinearLayout
+    private lateinit var styleList: LinearLayout
     private var density = 1f
 
     private fun dp(v: Int) = (v * density).toInt()
@@ -124,6 +125,43 @@ class MainActivity : Activity() {
             }
         })
 
+        // ----- RIO styles -----
+        layout.addView(heading("RIO STYLES"))
+        layout.addView(
+            note(
+                "A style is put in front of every word you type. Pick one with the Aa button in the keyboard toolbar.\n" +
+                    "Write or paste your own decoration below and it becomes the next RIO STYLE."
+            )
+        )
+        styleList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        layout.addView(styleList)
+        val styleEt = EditText(this).apply {
+            hint = "Your style, e.g. 《💗🍓🎧─⬣"
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.GRAY)
+            setSingleLine(true)
+        }
+        layout.addView(styleEt)
+        layout.addView(Button(this).apply {
+            text = "Add RIO STYLE"
+            setOnClickListener {
+                val v = styleEt.text.toString().trim()
+                if (v.isEmpty() || v.length > RioStyles.MAX_LEN) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Style can't be empty or longer than ${RioStyles.MAX_LEN} characters",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    val list = RioStyles.custom(prefs)
+                    if (!list.contains(v) && !RioStyles.builtIn.contains(v)) list.add(v)
+                    RioStyles.saveCustom(prefs, list)
+                    styleEt.setText("")
+                    refreshStyles()
+                }
+            }
+        })
+
         // ----- background -----
         layout.addView(heading("Keyboard background"))
         layout.addView(note("Pick a photo from your gallery to use behind the keys."))
@@ -161,6 +199,7 @@ class MainActivity : Activity() {
         }
         setContentView(scroll)
         refreshSnips()
+        refreshStyles()
     }
 
     private fun heading(s: String) = TextView(this).apply {
@@ -207,8 +246,44 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun refreshStyles() {
+        styleList.removeAllViews()
+        val builtInCount = RioStyles.builtIn.size
+        val all = RioStyles.all(prefs)
+        all.forEachIndexed { i, deco ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            row.addView(TextView(this).apply {
+                text = "${RioStyles.name(i)}\n${deco}hello ${deco}world"
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            if (i >= builtInCount) {
+                row.addView(Button(this).apply {
+                    text = "✕"
+                    setOnClickListener {
+                        val cur = RioStyles.custom(prefs)
+                        val idx = i - builtInCount
+                        if (idx in cur.indices) cur.removeAt(idx)
+                        RioStyles.saveCustom(prefs, cur)
+                        // keep the selected style pointing at the right entry
+                        val sel = RioStyles.selected(prefs)
+                        if (sel == i) RioStyles.select(prefs, -1)
+                        else if (sel > i) RioStyles.select(prefs, sel - 1)
+                        refreshStyles()
+                    }
+                })
+            }
+            styleList.addView(row)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (::snipList.isInitialized) refreshSnips()
+        if (::styleList.isInitialized) refreshStyles()
     }
 }

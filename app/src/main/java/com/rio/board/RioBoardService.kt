@@ -129,6 +129,8 @@ class RioBoardService : InputMethodService() {
     private val sbuf = StringBuilder() // raw Singlish letters being composed
     private var lastComposeMs = 0L
     private var fontStyle = 0          // 0 = normal, see Fonts.names
+    private var rioStyle = -1          // -1 = off, else index into rioList
+    private var rioList: List<String> = emptyList()
     private var snips = JSONObject()
     private var bgOn = false
     private var bgBitmap: Bitmap? = null
@@ -172,6 +174,7 @@ class RioBoardService : InputMethodService() {
         keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
         singlishOn = prefs.getBoolean("singlish", false)
         snips = Snips.load(prefs)
+        loadRioStyles()
         loadBackground()
         instance = this
         try {
@@ -236,6 +239,7 @@ class RioBoardService : InputMethodService() {
         toolsPinned = false
         sbuf.clear()
         snips = Snips.load(prefs)
+        loadRioStyles()
         captureClip()
         flushPendingVoice()
         suggestions = computeSuggestions()
@@ -401,7 +405,7 @@ class RioBoardService : InputMethodService() {
         add(IconView.Kind.GLOBE) { flushSinglish(); siMode = !siMode; symbols = false; panel = Panel.NONE; render() }
         addText("A→අ", 13f, singlishOn) { setSinglish(!singlishOn) }
         addText("🎤", 18f, false) { startVoice() }
-        addText("Aa", 16f, fontStyle != 0 || panel == Panel.FONTS) { togglePanel(Panel.FONTS) }
+        addText("Aa", 16f, fontStyle != 0 || rioStyle >= 0 || panel == Panel.FONTS) { togglePanel(Panel.FONTS) }
         addText("⚡", 18f, panel == Panel.SNIPS) { togglePanel(Panel.SNIPS) }
         add(IconView.Kind.UNDO) { menuAction(android.R.id.undo) }
         add(IconView.Kind.REDO) { menuAction(android.R.id.redo) }
@@ -934,7 +938,7 @@ class RioBoardService : InputMethodService() {
         layer.forEach { keys ->
             root.addView(row(keys.map { s ->
                 val label = if (siLayer == 2) "\u25CC$s" else s
-                Key(label, textSp = 22f) { type(s) }
+                Key(label, textSp = 22f) { decorateWordStart(s); type(s) }
             }))
         }
         repeat(3 - layer.size) {
@@ -998,7 +1002,7 @@ class RioBoardService : InputMethodService() {
         tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, k.textSp)
         tv.setTextColor(
             when {
-                k.space -> th.hint
+                k.space -> th.text
                 k.style == Style.ACCENT || k.style == Style.ACTIVE -> Color.WHITE
                 else -> th.text
             }
@@ -1201,6 +1205,15 @@ class RioBoardService : InputMethodService() {
             ic.commitText("", 1)
             return
         }
+        // a RIO STYLE decoration is removed in one tap
+        if (rioStyle in rioList.indices) {
+            val deco = rioList[rioStyle]
+            val b = ic.getTextBeforeCursor(deco.length, 0)
+            if (b != null && b.toString() == deco) {
+                ic.deleteSurroundingText(deco.length, 0)
+                return
+            }
+        }
         val before = ic.getTextBeforeCursor(2, 0)
         if (before.isNullOrEmpty()) {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL)
@@ -1259,6 +1272,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun typeLetter(label: String) {
+        if (sbuf.isEmpty()) decorateWordStart(label)
         if (singlishOn) {
             toolsPinned = false
             sbuf.append(label)
@@ -1280,10 +1294,44 @@ class RioBoardService : InputMethodService() {
     private fun styled(s: String): String =
         if (fontStyle == 0 || singlishOn || s.length != 1) s else Fonts.convert(s[0], fontStyle)
 
-    private fun spaceLabel(): String = when {
-        fontStyle != 0 && !siMode -> Fonts.names[fontStyle]
-        singlishOn && !siMode -> "සිංහල · Singlish"
-        else -> "RIO BOARD"
+    private fun spaceLabel(): String = "RIO BOARD"
+
+    // ---------- RIO STYLES (decoration in front of every word) ----------
+    private fun loadRioStyles() {
+        rioList = RioStyles.all(prefs)
+        val sel = RioStyles.selected(prefs)
+        rioStyle = if (sel in rioList.indices) sel else -1
+    }
+
+    private fun setRioStyle(i: Int) {
+        flushSinglish()
+        rioStyle = if (i in rioList.indices) i else -1
+        RioStyles.select(prefs, rioStyle)
+    }
+
+    /** Puts the active RIO STYLE decoration in front of a word that is just starting. */
+    private fun decorateWordStart(first: String) {
+        if (rioStyle !in rioList.indices || first.isEmpty()) return
+        if (!Character.isLetterOrDigit(first.codePointAt(0))) return
+        val ic = currentInputConnection ?: return
+        val deco = rioList[rioStyle]
+        val before = ic.getTextBeforeCursor(deco.length + 2, 0)?.toString() ?: ""
+        if (before.endsWith(deco)) return
+        if (before.isNotEmpty()) {
+            val cp = before.codePointBefore(before.length)
+            val t = Character.getType(cp)
+            val startsNew = Character.isWhitespace(cp) || (cp != '\''.code && (
+                t == Character.CONNECTOR_PUNCTUATION.toInt() ||
+                    t == Character.DASH_PUNCTUATION.toInt() ||
+                    t == Character.START_PUNCTUATION.toInt() ||
+                    t == Character.END_PUNCTUATION.toInt() ||
+                    t == Character.INITIAL_QUOTE_PUNCTUATION.toInt() ||
+                    t == Character.FINAL_QUOTE_PUNCTUATION.toInt() ||
+                    t == Character.OTHER_PUNCTUATION.toInt()
+                ))
+            if (!startsNew) return
+        }
+        ic.commitText(deco, 1)
     }
 
     // ---------- shortcuts ("gm" + space -> "Good morning") ----------
@@ -1352,6 +1400,40 @@ class RioBoardService : InputMethodService() {
         root.addView(panelBody(list))
     }
 
+    private fun styleRow(name: String, sample: String, on: Boolean, onPick: () -> Unit): View {
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            background = roundBg(if (on) th.accent else th.key, 12)
+            isClickable = true
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                setMargins(dp(4), dp(3), dp(4), dp(3))
+            }
+            setOnClickListener {
+                feedback(it)
+                onPick()
+                suggestions = emptyList()
+                panel = Panel.NONE
+                render()
+            }
+        }
+        r.addView(TextView(this).apply {
+            text = name
+            setTextColor(if (on) Color.WHITE else th.hint)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        })
+        if (sample.isNotEmpty()) {
+            r.addView(TextView(this).apply {
+                text = sample
+                setTextColor(if (on) Color.WHITE else th.text)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            })
+        }
+        return r
+    }
+
     // ---------- fancy fonts ----------
     private fun renderFonts() {
         root.addView(panelHeader("Fonts"))
@@ -1397,6 +1479,20 @@ class RioBoardService : InputMethodService() {
             list.addView(r)
         }
         list.addView(hintText("Works for English letters and numbers. Pick Normal to turn it off."))
+
+        // ----- RIO STYLES -----
+        list.addView(TextView(this).apply {
+            text = "RIO STYLES"
+            setTextColor(th.text)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(10), dp(10), dp(10), dp(4))
+        })
+        list.addView(styleRow("Off", "", rioStyle < 0) { setRioStyle(-1) })
+        rioList.forEachIndexed { i, deco ->
+            list.addView(styleRow(RioStyles.name(i), deco + "hello " + deco + "world", i == rioStyle) { setRioStyle(i) })
+        }
+        list.addView(hintText("A style goes in front of every word you type. Add your own in the RIO BOARD app."))
         root.addView(panelBody(list))
     }
 
