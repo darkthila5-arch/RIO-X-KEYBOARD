@@ -7,13 +7,12 @@ import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
-import android.graphics.Typeface
 import android.view.View
 
 /** Simple line icons drawn in code (no image files needed). */
 class IconView(context: Context, private val kind: Kind) : View(context) {
 
-    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, FONT }
+    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID }
 
     var tint: Int = Color.WHITE
         set(value) {
@@ -24,10 +23,6 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val path = Path()
-    private val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.DEFAULT_BOLD
-    }
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
@@ -162,21 +157,6 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
                 c.drawRoundRect(RectF(13.5f, 4f, 20f, 10.5f), 1.5f, 1.5f, p)
                 c.drawRoundRect(RectF(4f, 13.5f, 10.5f, 20f), 1.5f, 1.5f, p)
                 c.drawRoundRect(RectF(13.5f, 13.5f, 20f, 20f), 1.5f, 1.5f, p)
-            }
-            Kind.MIC -> {
-                c.drawRoundRect(RectF(9f, 3f, 15f, 14f), 3f, 3f, p)
-                path.reset()
-                path.moveTo(5.5f, 11f)
-                path.quadTo(5.5f, 18f, 12f, 18f)
-                path.quadTo(18.5f, 18f, 18.5f, 11f)
-                c.drawPath(path, p)
-                c.drawLine(12f, 18f, 12f, 21.5f, p)
-                c.drawLine(8.5f, 21.5f, 15.5f, 21.5f, p)
-            }
-            Kind.FONT -> {
-                tp.color = tint
-                tp.textSize = 15f
-                c.drawText("Aa", 12f, 17.5f, tp)
             }
             Kind.TRASH -> {
                 c.drawLine(4f, 7f, 20f, 7f, p)
