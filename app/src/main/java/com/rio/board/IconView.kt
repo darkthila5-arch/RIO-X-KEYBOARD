@@ -12,7 +12,7 @@ import android.view.View
 /** Simple line icons drawn in code (no image files needed). */
 class IconView(context: Context, private val kind: Kind) : View(context) {
 
-    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH }
+    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID }
 
     var tint: Int = Color.WHITE
         set(value) {
@@ -116,6 +116,48 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
                 path.lineTo(11f, 18f)
                 c.drawPath(path, p)
             }
+            Kind.EMOJI -> {
+                c.drawCircle(12f, 12f, 9f, p)
+                c.drawCircle(9f, 10f, 1.2f, fill)
+                c.drawCircle(15f, 10f, 1.2f, fill)
+                path.reset()
+                path.moveTo(8f, 14f)
+                path.quadTo(12f, 18.5f, 16f, 14f)
+                c.drawPath(path, p)
+            }
+            Kind.UNDO -> drawUndo(c)
+            Kind.REDO -> {
+                c.save()
+                c.translate(24f, 0f)
+                c.scale(-1f, 1f)
+                drawUndo(c)
+                c.restore()
+            }
+            Kind.LEFT -> {
+                path.reset()
+                path.moveTo(15f, 5f)
+                path.lineTo(8f, 12f)
+                path.lineTo(15f, 19f)
+                c.drawPath(path, p)
+            }
+            Kind.RIGHT -> {
+                path.reset()
+                path.moveTo(9f, 5f)
+                path.lineTo(16f, 12f)
+                path.lineTo(9f, 19f)
+                c.drawPath(path, p)
+            }
+            Kind.GLOBE -> {
+                c.drawCircle(12f, 12f, 9f, p)
+                c.drawOval(RectF(8f, 3f, 16f, 21f), p)
+                c.drawLine(3f, 12f, 21f, 12f, p)
+            }
+            Kind.GRID -> {
+                c.drawRoundRect(RectF(4f, 4f, 10.5f, 10.5f), 1.5f, 1.5f, p)
+                c.drawRoundRect(RectF(13.5f, 4f, 20f, 10.5f), 1.5f, 1.5f, p)
+                c.drawRoundRect(RectF(4f, 13.5f, 10.5f, 20f), 1.5f, 1.5f, p)
+                c.drawRoundRect(RectF(13.5f, 13.5f, 20f, 20f), 1.5f, 1.5f, p)
+            }
             Kind.TRASH -> {
                 c.drawLine(4f, 7f, 20f, 7f, p)
                 path.reset()
@@ -135,5 +177,18 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
             }
         }
         c.restore()
+    }
+
+    private fun drawUndo(c: Canvas) {
+        path.reset()
+        path.moveTo(9f, 5f)
+        path.lineTo(4.5f, 9.5f)
+        path.lineTo(9f, 14f)
+        c.drawPath(path, p)
+        path.reset()
+        path.moveTo(4.5f, 9.5f)
+        path.lineTo(13f, 9.5f)
+        path.cubicTo(18f, 9.5f, 20f, 13f, 19.5f, 18f)
+        c.drawPath(path, p)
     }
 }

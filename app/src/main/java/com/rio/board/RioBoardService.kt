@@ -23,15 +23,17 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONArray
+import org.json.JSONObject
 
 class RioBoardService : InputMethodService() {
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI }
 
     private class Key(
         val label: String,
@@ -71,6 +73,29 @@ class RioBoardService : InputMethodService() {
         Theme("Light", "#E8EAF0", "#FFFFFF", "#C9CEDB", "#3B82F6", "#7C6CE0", "#B8BFD3", "#111111", "#5B6382", "#8FB8FF")
     )
 
+    // snow colours: auto (theme), then fixed colours, last = rainbow
+    private val snowPalette = listOf("auto", "#FFFFFF", "#7CC8FF", "#FF8AC8", "#FFD54A", "#7CFFB2", "rainbow")
+    private val rainbow = intArrayOf(
+        0xFFFF5252.toInt(), 0xFFFFA726.toInt(), 0xFFFFEE58.toInt(), 0xFF66BB6A.toInt(),
+        0xFF29B6F6.toInt(), 0xFF7E57C2.toInt(), 0xFFEC407A.toInt()
+    )
+
+    // ---------- word lists for suggestions ----------
+    private val enWords = ("the be to of and a in that have I it for not on with he as you do at this but his by from they we say her she or an will my one all would there their what so up out if about who get which go me when make can like time no just him know take people into year your good some could them see other than then now look only come its over think also back after use two how our work first well way even new want because any these give day most us is are was were been has had did does hello hi thanks thank please sorry yes okay ok where why home love friend friends today tomorrow yesterday night morning evening happy birthday welcome great nice beautiful really very much many here still call phone message send share video song music photo picture game school class exam study money food water bus train going coming doing being having something anything everything nothing someone everyone always never sometimes maybe again already before tonight together should might must need needs wait waiting enough little big small long short right left help keep let begin seem talk turn start show hear play run move live believe bring happen write provide sit stand lose pay meet include continue set learn change lead understand watch follow stop create speak read allow add spend grow open walk win offer remember consider appear buy serve expect build stay fall cut reach remain people person world life hand part child eye woman place week case point government company number group problem fact").split(" ")
+
+    private val siWords = ("ඔයා මම අපි ඔබ කොහොමද කොහොමෙයි ස්තූතියි හරි ඉතින් මොකද මොකක්ද මොනවද කොහෙද නැහැ ඔව් කරන්න යන්න එන්න බලන්න දෙන්න ගන්න ලස්සනයි ආයුබෝවන් සුභ රාත්‍රියක් උදෑසනක් දැන් ඊයේ අද හෙට ගෙදර යාලුවා යාලුවෝ අම්මා තාත්තා මල්ලි අක්කා අයියා නංගි ආදරේ සතුටුයි දුකයි කමක් නැහැ පුළුවන් බැහැ ඕන නෑ තියෙනවා මොකෝ ඇයි කවද්ද කීයද කවුද මෙහෙ එහෙ ඔහොම මේක ඒක ඕක").split(" ")
+
+    private val dict: List<String> by lazy { (enWords + siWords).filter { it.isNotBlank() } }
+
+    // ---------- emoji ----------
+    private val emojiCats: List<Pair<String, List<String>>> = listOf(
+        "😀" to ("😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇 🙂 😉 😍 🥰 😘 😋 😛 😜 🤪 😎 🤩 🥳 😏 😒 😞 😔 😢 😭 😤 😡 🤬 😱 😨 😰 😓 🤗 🤔 🤭 🤫 😶 😐 🙄 😴 🤤 😷 🤒 🥵 🥶 🤯 😈 💀 👻 🤡 💩").split(" "),
+        "👍" to ("👍 👎 👌 ✌️ 🤞 🤟 🤘 👏 🙌 🙏 💪 👋 🤝 ✊ 👊 ❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💔 💕 💞 💓 💗 💖 💘 💝 🔥 ✨ ⭐ 🌟 💯 ✅ ❌ ⚡ 💥 🎉 🎊 💫 💦 👀 👑").split(" "),
+        "🐶" to ("🐶 🐱 🐭 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐧 🐦 🦅 🐢 🐍 🐙 🐬 🦋 🌹 🌸 🌴 🌈 ☀️ 🌙 ❄️ 🍎 🍌 🍉 🍇 🍓 🍕 🍔 🍟 🌭 🍩 🍪 🎂 🍫 ☕ 🍺 🥤 🍜").split(" "),
+        "🚀" to ("📱 💻 🎧 🎮 📷 🎬 🎵 🎶 🚗 ✈️ 🚀 🏠 ⚽ 🏏 🏆 🎁 💰 💎 🔑 🔒 📌 📎 ✏️ 📚 💡 🔔 ⏰ 📞 🇱🇰 🚌 🏍️ 🎯 🎈 🛒 📝 📍 ⚙️ 🔋 📶").split(" ")
+    )
+    private var emojiCat = 0
+
     // ---------- state ----------
     private var siMode = false        // false = English, true = Sinhala
     private var shift = 0             // 0 off, 1 once, 2 caps lock
@@ -80,10 +105,15 @@ class RioBoardService : InputMethodService() {
     private var themeIdx = 0
     private var snowMode = 2          // 0 off, 1 keyboard area, 2 full screen
     private var lastSnow = 2
+    private var snowColorIdx = 0
     private var haptic = true
     private var keyHIdx = 1
     private var panel = Panel.NONE
+    private var toolbarX = 0
+    private var toolsPinned = false
+    private var suggestions: List<String> = emptyList()
     private val clips = ArrayList<String>()
+    private val learned = HashMap<String, Int>()
 
     private val keyHs = intArrayOf(44, 50, 56)
     private val keyH: Int get() = keyHs[keyHIdx]
@@ -92,6 +122,7 @@ class RioBoardService : InputMethodService() {
     private lateinit var cm: ClipboardManager
     private lateinit var frame: FrameLayout
     private lateinit var root: LinearLayout
+    private lateinit var barHolder: LinearLayout
     private lateinit var snow: SnowView
     private val handler = Handler(Looper.getMainLooper())
     private val th: Theme get() = themes[themeIdx]
@@ -116,11 +147,17 @@ class RioBoardService : InputMethodService() {
         themeIdx = prefs.getInt("theme", 0).coerceIn(0, themes.size - 1)
         snowMode = prefs.getInt("snow", 2).coerceIn(0, 2)
         lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
+        snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
         haptic = prefs.getBoolean("haptic", true)
         keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
         try {
             val arr = JSONArray(prefs.getString("clips", "[]"))
             for (i in 0 until arr.length()) clips.add(arr.getString(i))
+        } catch (e: Exception) {
+        }
+        try {
+            val o = JSONObject(prefs.getString("learned", "{}"))
+            o.keys().forEach { learned[it] = o.getInt(it) }
         } catch (e: Exception) {
         }
         cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
@@ -137,6 +174,10 @@ class RioBoardService : InputMethodService() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(3), dp(4), dp(3), dp(6))
+        }
+        barHolder = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
         }
         snow = SnowView(this)
         frame = FrameLayout(this)
@@ -167,9 +208,19 @@ class RioBoardService : InputMethodService() {
         makeWindowTransparent()
         if (shift == 1) shift = 0
         panel = Panel.NONE
+        toolsPinned = false
         captureClip()
+        suggestions = computeSuggestions()
         render()
         applySnow()
+    }
+
+    override fun onUpdateSelection(
+        oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int,
+        candidatesStart: Int, candidatesEnd: Int
+    ) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        updateSuggestions()
     }
 
     override fun onEvaluateFullscreenMode(): Boolean = false
@@ -199,15 +250,26 @@ class RioBoardService : InputMethodService() {
     }
 
     // ---------- snow ----------
+    private fun sysDimen(name: String): Int {
+        val id = resources.getIdentifier(name, "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id) else 0
+    }
+
     private fun applySnow() {
         if (!::snow.isInitialized || !::frame.isInitialized) return
-        snow.color = th.snow
+        snow.colors = when (snowColorIdx) {
+            0 -> intArrayOf(th.snow)
+            snowPalette.size - 1 -> rainbow
+            else -> intArrayOf(Color.parseColor(snowPalette[snowColorIdx]))
+        }
         snow.base = if (snowMode == 2) 75 else 40
         snow.running = snowMode != 0
         val lp = frame.layoutParams
         if (lp != null) {
-            val h = if (snowMode == 2) resources.displayMetrics.heightPixels
-            else ViewGroup.LayoutParams.WRAP_CONTENT
+            // keep the window inside the usable screen so the keyboard is not pushed down
+            val full = resources.displayMetrics.heightPixels - sysDimen("status_bar_height") -
+                    sysDimen("navigation_bar_height") - dp(2)
+            val h = if (snowMode == 2) full else ViewGroup.LayoutParams.WRAP_CONTENT
             if (lp.height != h) {
                 lp.height = h
                 frame.layoutParams = lp
@@ -233,11 +295,13 @@ class RioBoardService : InputMethodService() {
     private fun render() {
         root.removeAllViews()
         root.setBackgroundColor(th.bg)
-        root.addView(toolbar())
+        root.addView(barHolder)
+        refreshBar()
         when (panel) {
             Panel.CLIPBOARD -> renderClipboard()
             Panel.THEME -> renderTheme()
             Panel.SETTINGS -> renderSettings()
+            Panel.EMOJI -> renderEmoji()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -245,24 +309,97 @@ class RioBoardService : InputMethodService() {
         }
     }
 
-    // ----- toolbar (flat line icons, like Gboard) -----
-    private fun toolbar(): LinearLayout {
-        val bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
+    /** Top bar: word suggestions while typing, tools otherwise. */
+    private fun refreshBar() {
+        if (!::barHolder.isInitialized) return
+        barHolder.removeAllViews()
+        val showSug = suggestions.isNotEmpty() && panel == Panel.NONE && !toolsPinned
+        barHolder.addView(if (showSug) suggestionStrip() else toolbar())
+    }
+
+    // ----- toolbar (flat line icons, scrolls sideways) -----
+    private fun toolbar(): View {
+        val hsv = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
         }
+        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun add(kind: IconView.Kind, active: Boolean = false, onClick: () -> Unit) {
-            bar.addView(iconButton(kind, active, onClick))
+            val b = iconButton(kind, active, onClick)
+            b.layoutParams = LinearLayout.LayoutParams(dp(46), ViewGroup.LayoutParams.MATCH_PARENT).apply {
+                setMargins(dp(1), dp(2), dp(1), dp(2))
+            }
+            bar.addView(b)
         }
         add(IconView.Kind.CLIPBOARD) { pasteNow() }
         add(IconView.Kind.HISTORY, panel == Panel.CLIPBOARD) { togglePanel(Panel.CLIPBOARD) }
+        add(IconView.Kind.EMOJI, panel == Panel.EMOJI) { togglePanel(Panel.EMOJI) }
+        add(IconView.Kind.GLOBE) { siMode = !siMode; symbols = false; panel = Panel.NONE; render() }
+        add(IconView.Kind.UNDO) { menuAction(android.R.id.undo) }
+        add(IconView.Kind.REDO) { menuAction(android.R.id.redo) }
+        add(IconView.Kind.LEFT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) }
+        add(IconView.Kind.RIGHT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) }
         add(IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) }
         add(IconView.Kind.COPY) { menuAction(android.R.id.copy) }
         add(IconView.Kind.CUT) { menuAction(android.R.id.cut) }
         add(IconView.Kind.SNOW, snowMode != 0) { setSnow(if (snowMode != 0) 0 else lastSnow) }
         add(IconView.Kind.THEME, panel == Panel.THEME) { togglePanel(Panel.THEME) }
         add(IconView.Kind.SETTINGS, panel == Panel.SETTINGS) { togglePanel(Panel.SETTINGS) }
-        return bar
+        hsv.addView(
+            bar,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        )
+        hsv.setOnScrollChangeListener { _, x, _, _, _ -> toolbarX = x }
+        hsv.post { hsv.scrollTo(toolbarX, 0) }
+        return hsv
+    }
+
+    private fun suggestionStrip(): View {
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+        val tools = iconButton(IconView.Kind.GRID, false) {
+            toolsPinned = true
+            refreshBar()
+        }
+        tools.layoutParams = LinearLayout.LayoutParams(dp(44), ViewGroup.LayoutParams.MATCH_PARENT).apply {
+            setMargins(dp(2), dp(2), dp(2), dp(2))
+        }
+        r.addView(tools)
+        suggestions.forEachIndexed { i, w ->
+            if (i > 0) {
+                r.addView(View(this).apply {
+                    setBackgroundColor(th.special)
+                    layoutParams = LinearLayout.LayoutParams(dp(1), dp(22))
+                })
+            }
+            r.addView(TextView(this).apply {
+                text = w
+                gravity = Gravity.CENTER
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setTextColor(th.text)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+                if (i == 0) typeface = Typeface.DEFAULT_BOLD
+                background = flatBg()
+                isClickable = true
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    setMargins(dp(2), dp(2), dp(2), dp(2))
+                }
+                setOnClickListener {
+                    feedback(it)
+                    pickSuggestion(w)
+                }
+            })
+        }
+        return r
     }
 
     private fun togglePanel(p: Panel) {
@@ -313,20 +450,21 @@ class RioBoardService : InputMethodService() {
     }
 
     // ----- panels -----
+    private fun backButton(): View {
+        val b = iconButton(IconView.Kind.BACK, false) { panel = Panel.NONE; render() }
+        b.layoutParams = LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT).apply {
+            setMargins(dp(2), dp(3), dp(2), dp(3))
+        }
+        return b
+    }
+
     private fun panelHeader(title: String, actionKind: IconView.Kind? = null, action: (() -> Unit)? = null): LinearLayout {
         val h = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
         }
-        fun side(kind: IconView.Kind, onClick: () -> Unit): View {
-            val b = iconButton(kind, false, onClick)
-            b.layoutParams = LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                setMargins(dp(2), dp(3), dp(2), dp(3))
-            }
-            return b
-        }
-        h.addView(side(IconView.Kind.BACK) { panel = Panel.NONE; render() })
+        h.addView(backButton())
         h.addView(TextView(this).apply {
             text = title
             setTextColor(th.text)
@@ -338,7 +476,11 @@ class RioBoardService : InputMethodService() {
             }
         })
         if (actionKind != null && action != null) {
-            h.addView(side(actionKind, action))
+            val b = iconButton(actionKind, false, action)
+            b.layoutParams = LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.MATCH_PARENT).apply {
+                setMargins(dp(2), dp(3), dp(2), dp(3))
+            }
+            h.addView(b)
         } else {
             h.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(dp(52), 1) })
         }
@@ -359,6 +501,63 @@ class RioBoardService : InputMethodService() {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         setPadding(dp(8), dp(10), dp(8), dp(4))
         gravity = Gravity.CENTER
+    }
+
+    // ----- emoji panel -----
+    private fun renderEmoji() {
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
+        }
+        header.addView(backButton())
+        emojiCats.forEachIndexed { i, cat ->
+            header.addView(TextView(this).apply {
+                text = cat.first
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+                background = roundBg(if (i == emojiCat) th.accent else Color.TRANSPARENT, 12)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                    setMargins(dp(3), dp(5), dp(3), dp(5))
+                }
+                setOnClickListener {
+                    feedback(it)
+                    emojiCat = i
+                    render()
+                }
+            })
+        }
+        root.addView(header)
+
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), dp(2), dp(2), dp(8))
+        }
+        emojiCats[emojiCat].second.chunked(8).forEach { items ->
+            val r = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46))
+            }
+            items.forEach { e ->
+                r.addView(TextView(this).apply {
+                    text = e
+                    gravity = Gravity.CENTER
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
+                    background = flatBg()
+                    isClickable = true
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                    setOnClickListener {
+                        feedback(it)
+                        type(e)
+                    }
+                })
+            }
+            repeat(8 - items.size) {
+                r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+            }
+            grid.addView(r)
+        }
+        root.addView(panelBody(grid))
     }
 
     // ----- clipboard panel (card grid, like Gboard) -----
@@ -467,11 +666,6 @@ class RioBoardService : InputMethodService() {
             }
             layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
         }
-        val dot = TextView(this).apply {
-            text = if (selected) "✓" else ""
-            setTextColor(t.accent)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-        }
         val label = TextView(this).apply {
             text = t.name
             setTextColor(th.text)
@@ -500,6 +694,8 @@ class RioBoardService : InputMethodService() {
         }
         box.addView(settingLabel("Snow ❄"))
         box.addView(chipRow(listOf("Off", "Keyboard", "Full screen"), snowMode) { setSnow(it) })
+        box.addView(settingLabel("Snow colour"))
+        box.addView(colorRow())
         box.addView(settingLabel("Vibration"))
         box.addView(chipRow(listOf("On", "Off"), if (haptic) 0 else 1) {
             haptic = it == 0
@@ -533,6 +729,50 @@ class RioBoardService : InputMethodService() {
         setTextColor(th.hint)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
         setPadding(dp(4), dp(10), dp(4), dp(4))
+    }
+
+    private fun colorRow(): LinearLayout {
+        val r = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46))
+        }
+        snowPalette.forEachIndexed { i, name ->
+            val sel = i == snowColorIdx
+            val holder = LinearLayout(this).apply {
+                gravity = Gravity.CENTER
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                setOnClickListener {
+                    feedback(it)
+                    snowColorIdx = i
+                    prefs.edit().putInt("snowcol", i).apply()
+                    applySnow()
+                    render()
+                }
+            }
+            val dot = TextView(this).apply {
+                gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setTextColor(th.text)
+                text = if (i == 0) "A" else ""
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    when (name) {
+                        "auto" -> setColor(th.snow)
+                        "rainbow" -> {
+                            setGradientType(GradientDrawable.SWEEP_GRADIENT)
+                            setColors(rainbow)
+                        }
+                        else -> setColor(Color.parseColor(name))
+                    }
+                    setStroke(dp(if (sel) 3 else 1), if (sel) th.accent else th.special)
+                }
+                if (i == 0) setTextColor(Color.parseColor("#333333"))
+                layoutParams = LinearLayout.LayoutParams(dp(34), dp(34))
+            }
+            holder.addView(dot)
+            r.addView(holder)
+        }
+        return r
     }
 
     private fun chipRow(options: List<String>, selected: Int, onSelect: (Int) -> Unit): LinearLayout {
@@ -737,6 +977,66 @@ class RioBoardService : InputMethodService() {
         return tv
     }
 
+    // ---------- word suggestions ----------
+    private fun isWordChar(c: Char): Boolean =
+        c.isLetter() || c == '\'' || c == '\u200D' || c in '\u0D80'..'\u0DFF'
+
+    private fun currentPrefix(): String {
+        val before = currentInputConnection?.getTextBeforeCursor(24, 0)?.toString() ?: return ""
+        var i = before.length
+        while (i > 0 && isWordChar(before[i - 1])) i--
+        return before.substring(i)
+    }
+
+    private fun computeSuggestions(): List<String> {
+        val prefix = currentPrefix()
+        if (prefix.isEmpty()) return emptyList()
+        val lower = prefix.lowercase()
+        val out = LinkedHashSet<String>()
+        learned.entries
+            .filter { it.key.startsWith(lower) && it.key != lower }
+            .sortedByDescending { it.value }
+            .forEach { out.add(it.key) }
+        for (w in dict) {
+            if (out.size >= 6) break
+            if (w.startsWith(lower) && w != lower) out.add(w)
+        }
+        val cap = prefix[0].isUpperCase()
+        return out.take(3).map { w -> if (cap) w.replaceFirstChar { it.uppercase() } else w }
+    }
+
+    private fun updateSuggestions() {
+        if (!::barHolder.isInitialized) return
+        val list = computeSuggestions()
+        if (list != suggestions) {
+            suggestions = list
+            if (panel == Panel.NONE) refreshBar()
+        }
+    }
+
+    private fun pickSuggestion(word: String) {
+        val ic = currentInputConnection ?: return
+        val prefix = currentPrefix()
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(prefix.length, 0)
+        ic.commitText("$word ", 1)
+        ic.endBatchEdit()
+        learn(word)
+        suggestions = emptyList()
+        refreshBar()
+        if (::snow.isInitialized) snow.burst()
+    }
+
+    private fun learn(word: String) {
+        val k = word.lowercase().trim()
+        if (k.length < 2) return
+        learned[k] = (learned[k] ?: 0) + 1
+        if (learned.size > 600) {
+            learned.entries.sortedBy { it.value }.take(100).map { it.key }.forEach { learned.remove(it) }
+        }
+        prefs.edit().putString("learned", JSONObject(learned.toMap()).toString()).apply()
+    }
+
     // ---------- clipboard ----------
     private fun captureClip() {
         try {
@@ -779,7 +1079,14 @@ class RioBoardService : InputMethodService() {
 
     // ---------- input actions ----------
     private fun type(s: String) {
-        currentInputConnection?.commitText(s, 1)
+        val ic = currentInputConnection
+        toolsPinned = false
+        // a space/punctuation ends a word -> remember it for suggestions
+        if (s.length == 1 && !isWordChar(s[0])) {
+            val w = currentPrefix()
+            if (w.length >= 3) learn(w)
+        }
+        ic?.commitText(s, 1)
         if (::snow.isInitialized) snow.burst()
     }
 

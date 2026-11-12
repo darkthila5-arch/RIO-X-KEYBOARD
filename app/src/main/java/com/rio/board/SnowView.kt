@@ -15,7 +15,8 @@ class SnowView(context: Context) : View(context) {
     private class Flake(
         var x: Float, var y: Float,
         val r: Float, val vy: Float,
-        var phase: Float, val amp: Float
+        var phase: Float, val amp: Float,
+        val ci: Int
     )
 
     private val flakes = ArrayList<Flake>()
@@ -24,7 +25,8 @@ class SnowView(context: Context) : View(context) {
     private val d = resources.displayMetrics.density
     private var last = 0L
 
-    var color: Int = Color.WHITE
+    /** One colour, or several (each flake gets one of them). */
+    var colors: IntArray = intArrayOf(Color.WHITE)
     var base: Int = 45
 
     /** Snow only appears below this y (used to keep snow on the keyboard area only). */
@@ -55,7 +57,8 @@ class SnowView(context: Context) : View(context) {
             rnd.nextFloat() * width, y, r,
             (35f + rnd.nextFloat() * 75f) * d,
             rnd.nextFloat() * 6.28f,
-            (4f + rnd.nextFloat() * 12f) * d
+            (4f + rnd.nextFloat() * 12f) * d,
+            rnd.nextInt(1000)
         )
     }
 
@@ -69,9 +72,9 @@ class SnowView(context: Context) : View(context) {
 
         while (flakes.size < base) flakes.add(newFlake(false))
 
+        val cols = if (colors.isEmpty()) intArrayOf(Color.WHITE) else colors
         canvas.save()
         canvas.clipRect(0f, topLimit, width.toFloat(), height.toFloat())
-        paint.color = color
         val iter = flakes.iterator()
         while (iter.hasNext()) {
             val f = iter.next()
@@ -85,6 +88,7 @@ class SnowView(context: Context) : View(context) {
                 f.y = topLimit - f.r
                 f.x = rnd.nextFloat() * width
             }
+            paint.color = cols[f.ci % cols.size]
             paint.alpha = (120 + (f.r / (4f * d)) * 135).toInt().coerceIn(80, 255)
             canvas.drawCircle(f.x + sin(f.phase) * f.amp, f.y, f.r, paint)
         }
