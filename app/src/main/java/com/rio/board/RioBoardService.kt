@@ -117,6 +117,7 @@ class RioBoardService : InputMethodService() {
     private var snowMode = 2          // 0 off, 1 keyboard area, 2 full screen
     private var lastSnow = 2
     private var snowColorIdx = 0
+    private var effectIdx = 0         // 0 snow, 1 water drops, 2 leaves
     private var haptic = true
     private var keyHIdx = 1
     private var panel = Panel.NONE
@@ -145,7 +146,7 @@ class RioBoardService : InputMethodService() {
     private lateinit var frame: FrameLayout
     private lateinit var root: LinearLayout
     private lateinit var barHolder: LinearLayout
-    private lateinit var snow: SnowView
+    private lateinit var snow: EffectView
     private val handler = Handler(Looper.getMainLooper())
     private val th: Theme get() = themes[themeIdx]
 
@@ -170,6 +171,7 @@ class RioBoardService : InputMethodService() {
         snowMode = prefs.getInt("snow", 2).coerceIn(0, 2)
         lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
         snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
+        effectIdx = prefs.getInt("effect", 0).coerceIn(0, 2)
         haptic = prefs.getBoolean("haptic", true)
         keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
         singlishOn = prefs.getBoolean("singlish", false)
@@ -207,7 +209,7 @@ class RioBoardService : InputMethodService() {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
         }
-        snow = SnowView(this)
+        snow = EffectView(this)
         frame = FrameLayout(this)
         frame.addView(
             root,
@@ -306,6 +308,8 @@ class RioBoardService : InputMethodService() {
             snowPalette.size - 1 -> rainbow
             else -> intArrayOf(Color.parseColor(snowPalette[snowColorIdx]))
         }
+        snow.type = EffectView.Type.values()[effectIdx]
+        snow.natural = snowColorIdx == 0 && effectIdx != 0
         snow.base = if (snowMode == 2) 75 else 40
         snow.running = snowMode != 0
         val lp = frame.layoutParams
@@ -762,9 +766,15 @@ class RioBoardService : InputMethodService() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(2), dp(8), dp(10))
         }
-        box.addView(settingLabel("Snow ❄"))
+        box.addView(settingLabel("Effect"))
+        box.addView(chipRow(listOf("Snow ❄", "Water drops 💧", "Leaves 🍃"), effectIdx) {
+            effectIdx = it
+            prefs.edit().putInt("effect", effectIdx).apply()
+            if (snowMode == 0) setSnow(lastSnow) else { applySnow(); render() }
+        })
+        box.addView(settingLabel("Effect area"))
         box.addView(chipRow(listOf("Off", "Keyboard", "Full screen"), snowMode) { setSnow(it) })
-        box.addView(settingLabel("Snow colour"))
+        box.addView(settingLabel("Effect colour (auto = natural for drops/leaves)"))
         box.addView(colorRow())
         box.addView(settingLabel("Vibration"))
         box.addView(chipRow(listOf("On", "Off"), if (haptic) 0 else 1) {
