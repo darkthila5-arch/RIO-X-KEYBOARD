@@ -44,7 +44,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM }
 
     private class Key(
         val label: String,
@@ -123,6 +123,20 @@ class RioBoardService : InputMethodService() {
     private var snowColorIdx = 0
     private var effectIdx = 0         // 0 snow, 1 water drops, 2 leaves
     private var haptic = true
+    private val boomCounts = intArrayOf(5, 10, 20, 50)
+    private val boomDelays = longArrayOf(300L, 600L, 1000L)
+    private var boomCountIdx = 1
+    private var boomDelayIdx = 1
+    private var boomRunning = false
+    private var boomLeft = 0
+    private var boomTotal = 0
+    private var boomMsg = ""
+    private var boomStatusText = ""
+    private var boomStatus: TextView? = null
+    private val boomStep = Runnable { boomTick() }
+    private var keyPreview = true     // iPhone-style key pop-up bubble
+    private var previewPopup: android.widget.PopupWindow? = null
+    private var previewTv: TextView? = null
     private var keyHIdx = 1
     private var panel = Panel.NONE
     private var toolbarX = 0
@@ -177,6 +191,9 @@ class RioBoardService : InputMethodService() {
         snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
         effectIdx = prefs.getInt("effect", 0).coerceIn(0, 2)
         haptic = prefs.getBoolean("haptic", true)
+        keyPreview = prefs.getBoolean("preview", true)
+        boomCountIdx = prefs.getInt("boom_count", 1).coerceIn(0, boomCounts.size - 1)
+        boomDelayIdx = prefs.getInt("boom_delay", 1).coerceIn(0, boomDelays.size - 1)
         keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
         singlishOn = prefs.getBoolean("singlish", false)
         snips = Snips.load(prefs)
@@ -198,6 +215,9 @@ class RioBoardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        boomRunning = false
+        handler.removeCallbacks(boomStep)
+        hidePreview()
         cm.removePrimaryClipChangedListener(clipListener)
         if (instance === this) instance = null
         super.onDestroy()
@@ -242,6 +262,11 @@ class RioBoardService : InputMethodService() {
         makeWindowTransparent()
         if (shift == 1) shift = 0
         panel = Panel.NONE
+        if (boomRunning && restarting != true) {
+            boomRunning = false
+            handler.removeCallbacks(boomStep)
+            boomStatusText = "Stopped"
+        }
         toolsPinned = false
         sbuf.clear()
         snips = Snips.load(prefs)
@@ -345,6 +370,7 @@ class RioBoardService : InputMethodService() {
 
     // ---------- rendering ----------
     private fun render() {
+        hidePreview()
         root.removeAllViews()
         applyRootBg()
         root.addView(barHolder)
@@ -356,6 +382,8 @@ class RioBoardService : InputMethodService() {
             Panel.EMOJI -> renderEmoji()
             Panel.FONTS -> renderFonts()
             Panel.SNIPS -> renderSnips()
+            Panel.BACKGROUND -> renderBackgrounds()
+            Panel.BOOM -> renderBoom()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -415,6 +443,8 @@ class RioBoardService : InputMethodService() {
         addText("🎤", 18f, false) { startVoice() }
         addText("Aa", 16f, fontStyle != 0 || rioStyle >= 0 || panel == Panel.FONTS) { togglePanel(Panel.FONTS) }
         addText("⚡", 18f, panel == Panel.SNIPS) { togglePanel(Panel.SNIPS) }
+        addText("🖼️", 18f, panel == Panel.BACKGROUND || bgOn) { togglePanel(Panel.BACKGROUND) }
+        addText("💣", 18f, panel == Panel.BOOM || boomRunning) { togglePanel(Panel.BOOM) }
         add(IconView.Kind.UNDO) { menuAction(android.R.id.undo) }
         add(IconView.Kind.REDO) { menuAction(android.R.id.redo) }
         add(IconView.Kind.LEFT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) }
@@ -638,6 +668,163 @@ class RioBoardService : InputMethodService() {
         root.addView(panelBody(grid))
     }
 
+    // ----- background panel (pick a wallpaper without leaving the keyboard) -----
+    private fun renderBackgrounds() {
+        root.addView(panelHeader("Backgrounds", IconView.Kind.TRASH) { removeBackground() })
+        val current = if (bgOn) prefs.getString("bgname", "") ?: "" else ""
+        val grid = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(2), dp(4), dp(8))
+        }
+        fun tile(selected: Boolean, content: View, onClick: () -> Unit): View {
+            return FrameLayout(this).apply {
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+                background = roundBg(if (selected) th.accent else Color.TRANSPARENT, 12)
+                layoutParams = LinearLayout.LayoutParams(0, dp(72), 1f).apply { setMargins(dp(2), dp(2), dp(2), dp(2)) }
+                isClickable = true
+                addView(content, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                setOnClickListener {
+                    feedback(it)
+                    onClick()
+                }
+            }
+        }
+        val tiles = ArrayList<View>()
+        tiles.add(tile(false, TextView(this).apply {
+            text = "\uD83D\uDCC1\nGallery"
+            gravity = Gravity.CENTER
+            setTextColor(th.text)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            background = roundBg(th.special, 10)
+        }) {
+            try {
+                startActivity(Intent(this@RioBoardService, PickImageActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (e: Exception) {
+            }
+        })
+        DefaultBackgrounds.items.forEach { (_, file) ->
+            val iv = android.widget.ImageView(this).apply {
+                scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(th.key)
+                DefaultBackgrounds.thumb(this@RioBoardService, file)?.let { setImageBitmap(it) }
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, dp(10).toFloat())
+                    }
+                }
+            }
+            tiles.add(tile(file == current, iv) { DefaultBackgrounds.setAsBackground(this, file) })
+        }
+        tiles.chunked(3).forEach { rowTiles ->
+            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            rowTiles.forEach { r.addView(it) }
+            repeat(3 - rowTiles.size) {
+                r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+            }
+            grid.addView(r)
+        }
+        root.addView(panelBody(grid))
+    }
+
+    // ----- message boom: repeat the message that is in the text box -----
+    private fun boomSetStatus(t: String) {
+        boomStatusText = t
+        boomStatus?.text = t
+    }
+
+    private fun boomStart() {
+        flushSinglish()
+        val ic = currentInputConnection ?: return
+        var msg = ic.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)?.text?.toString() ?: ""
+        if (msg.isBlank()) {
+            msg = (ic.getTextBeforeCursor(500, 0)?.toString() ?: "") + (ic.getTextAfterCursor(500, 0)?.toString() ?: "")
+        }
+        if (msg.isBlank()) {
+            boomSetStatus("Type a message in the chat box first")
+            return
+        }
+        boomMsg = msg
+        boomTotal = boomCounts[boomCountIdx]
+        boomLeft = boomTotal
+        boomRunning = true
+        boomSetStatus("Sending...")
+        handler.post(boomStep)
+        render()
+    }
+
+    private fun boomTick() {
+        if (!boomRunning) return
+        if (boomLeft <= 0) {
+            boomStop("Done: $boomTotal sent")
+            return
+        }
+        val ic = currentInputConnection
+        if (ic == null) {
+            boomStop("Stopped")
+            return
+        }
+        val cur = ic.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)?.text?.toString() ?: ""
+        if (cur.isEmpty()) ic.commitText(boomMsg, 1)
+        pressEnter()
+        boomLeft--
+        boomSetStatus("Sent ${boomTotal - boomLeft}/$boomTotal")
+        handler.postDelayed(boomStep, boomDelays[boomDelayIdx])
+    }
+
+    private fun boomStop(msg: String) {
+        boomRunning = false
+        handler.removeCallbacks(boomStep)
+        boomStatusText = msg
+        if (::root.isInitialized && panel == Panel.BOOM) render() else boomStatus?.text = msg
+    }
+
+    private fun renderBoom() {
+        root.addView(panelHeader("Message boom"))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(2), dp(8), dp(10))
+        }
+        box.addView(hintText("Type your message in the chat box, pick how many times, then press Start. Needs Enter to send in that app."))
+        box.addView(settingLabel("How many times"))
+        box.addView(chipRow(boomCounts.map { "${it}x" }, boomCountIdx) {
+            boomCountIdx = it
+            prefs.edit().putInt("boom_count", it).apply()
+            render()
+        })
+        box.addView(settingLabel("Speed"))
+        box.addView(chipRow(listOf("Fast", "Normal", "Slow"), boomDelayIdx) {
+            boomDelayIdx = it
+            prefs.edit().putInt("boom_delay", it).apply()
+            render()
+        })
+        box.addView(TextView(this).apply {
+            text = if (boomRunning) "Stop" else "Start"
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            typeface = Typeface.DEFAULT_BOLD
+            background = roundBg(if (boomRunning) Color.parseColor("#E5484D") else th.accent, 12)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply {
+                setMargins(dp(3), dp(12), dp(3), dp(4))
+            }
+            isClickable = true
+            setOnClickListener {
+                feedback(it)
+                if (boomRunning) boomStop("Stopped") else boomStart()
+            }
+        })
+        boomStatus = TextView(this).apply {
+            text = boomStatusText
+            gravity = Gravity.CENTER
+            setTextColor(th.hint)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setPadding(0, dp(6), 0, dp(4))
+        }
+        box.addView(boomStatus)
+        root.addView(panelBody(box))
+    }
+
     // ----- clipboard panel (card grid, like Gboard) -----
     private fun renderClipboard() {
         root.addView(panelHeader("Clipboard", IconView.Kind.TRASH) {
@@ -784,6 +971,12 @@ class RioBoardService : InputMethodService() {
         box.addView(chipRow(listOf("On", "Off"), if (haptic) 0 else 1) {
             haptic = it == 0
             prefs.edit().putBoolean("haptic", haptic).apply()
+            render()
+        })
+        box.addView(settingLabel("Key pop-up bubble"))
+        box.addView(chipRow(listOf("On", "Off"), if (keyPreview) 0 else 1) {
+            keyPreview = it == 0
+            prefs.edit().putBoolean("preview", keyPreview).apply()
             render()
         })
         box.addView(settingLabel("Key height"))
@@ -1009,6 +1202,59 @@ class RioBoardService : InputMethodService() {
         layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, w)
     }
 
+    /** Tiny squeeze when a key is touched, springs back on release. */
+    private fun pressAnim(v: View, down: Boolean) {
+        v.animate().cancel()
+        if (down) v.animate().scaleX(0.94f).scaleY(0.94f).setDuration(40).start()
+        else v.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
+    }
+
+    /** Light keyboard "tick" on key touch. */
+    private fun keyTick(v: View) {
+        if (haptic) v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+    }
+
+    /** iPhone-style bubble that shows the letter above the key while it is held. */
+    private fun showPreview(anchor: View, label: String) {
+        if (!keyPreview || !::frame.isInitialized) return
+        try {
+            val w = (anchor.width * 1.35f).toInt().coerceAtLeast(dp(46))
+            val h = (anchor.height * 1.45f).toInt().coerceAtLeast(dp(56))
+            val loc = IntArray(2)
+            anchor.getLocationOnScreen(loc)
+            val x = loc[0] + anchor.width / 2 - w / 2
+            val y = loc[1] - h
+            val tv = previewTv ?: TextView(this).apply {
+                gravity = Gravity.CENTER
+                includeFontPadding = false
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
+            }.also { previewTv = it }
+            val p = previewPopup ?: android.widget.PopupWindow(tv, w, h).apply {
+                isTouchable = false
+                isFocusable = false
+                isClippingEnabled = false
+                inputMethodMode = android.widget.PopupWindow.INPUT_METHOD_NOT_NEEDED
+                elevation = dp(6).toFloat()
+            }.also { previewPopup = it }
+            tv.text = label
+            tv.setTextColor(th.text)
+            tv.background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(if (th.bg == th.key) th.special else th.key or (0xFF shl 24))
+                setStroke(dp(1), th.accent)
+            }
+            if (p.isShowing) p.update(x, y, w, h) else p.showAtLocation(frame, Gravity.NO_GRAVITY, x, y)
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun hidePreview() {
+        try {
+            previewPopup?.dismiss()
+        } catch (e: Exception) {
+        }
+    }
+
     private fun keyView(k: Key): View {
         val tv = TextView(this)
         tv.text = k.label
@@ -1051,28 +1297,60 @@ class RioBoardService : InputMethodService() {
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         view.isPressed = true
-                        feedback(view)
+                        pressAnim(view, true)
+                        keyTick(view)
                         k.onPress()
                         handler.postDelayed(r, 400)
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         view.isPressed = false
+                        pressAnim(view, false)
                         handler.removeCallbacks(r)
                     }
                 }
                 true
             }
         } else {
-            tv.setOnClickListener {
-                feedback(it)
-                k.onPress()
-            }
+            // Keys fire the moment the finger touches (no waiting for release), so fast typing
+            // feels instant. A key that also has a long-press action fires on release instead.
             val long = k.onLong
-            if (long != null) {
-                tv.setOnLongClickListener {
-                    long()
-                    true
+            val previewable = !k.space && k.style == Style.NORMAL && k.label.isNotEmpty() &&
+                k.label.codePointCount(0, k.label.length) <= 2
+            var longDone = false
+            val longRun = Runnable {
+                longDone = true
+                hidePreview()
+                long?.invoke()
+            }
+            tv.setOnTouchListener { view, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        view.isPressed = true
+                        pressAnim(view, true)
+                        keyTick(view)
+                        longDone = false
+                        if (long != null) {
+                            handler.postDelayed(longRun, 380)
+                        } else {
+                            if (previewable) showPreview(view, k.label)
+                            k.onPress()
+                        }
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        view.isPressed = false
+                        pressAnim(view, false)
+                        handler.removeCallbacks(longRun)
+                        hidePreview()
+                        if (long != null && !longDone) k.onPress()
+                    }
+                    MotionEvent.ACTION_CANCEL -> {
+                        view.isPressed = false
+                        pressAnim(view, false)
+                        handler.removeCallbacks(longRun)
+                        hidePreview()
+                    }
                 }
+                true
             }
         }
         return tv
@@ -1564,7 +1842,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun removeBackground() {
-        prefs.edit().putBoolean("bgon", false).apply()
+        prefs.edit().putBoolean("bgon", false).remove("bgname").apply()
         try {
             File(filesDir, "kb_bg.jpg").delete()
         } catch (e: Exception) {

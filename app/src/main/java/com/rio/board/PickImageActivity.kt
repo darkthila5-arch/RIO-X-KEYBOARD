@@ -29,7 +29,7 @@ class PickImageActivity : Activity() {
         if (resultCode == RESULT_OK) {
             val uri = data?.data
             if (uri != null && saveBackground(uri)) {
-                getSharedPreferences("rio_board", MODE_PRIVATE).edit().putBoolean("bgon", true).apply()
+                getSharedPreferences("rio_board", MODE_PRIVATE).edit().putBoolean("bgon", true).remove("bgname").apply()
                 RioBoardService.instance?.reloadBackground()
                 Toast.makeText(this, "Keyboard background set", Toast.LENGTH_SHORT).show()
             } else {

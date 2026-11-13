@@ -176,7 +176,7 @@ class MainActivity : Activity() {
         layout.addView(Button(this).apply {
             text = "Remove photo"
             setOnClickListener {
-                prefs.edit().putBoolean("bgon", false).apply()
+                prefs.edit().putBoolean("bgon", false).remove("bgname").apply()
                 try {
                     File(filesDir, "kb_bg.jpg").delete()
                 } catch (e: Exception) {

@@ -29,7 +29,7 @@ object DefaultBackgrounds {
 
     private val thumbs = HashMap<String, Bitmap>()
 
-    private fun thumb(ctx: Context, file: String): Bitmap? {
+    fun thumb(ctx: Context, file: String): Bitmap? {
         thumbs[file]?.let { return it }
         return try {
             val o = BitmapFactory.Options().apply { inSampleSize = 3 }
@@ -47,7 +47,7 @@ object DefaultBackgrounds {
             ctx.assets.open("backgrounds/$file").use { input ->
                 File(ctx.filesDir, "kb_bg.jpg").outputStream().use { out -> input.copyTo(out) }
             }
-            ctx.getSharedPreferences("rio_board", Context.MODE_PRIVATE).edit().putBoolean("bgon", true).apply()
+            ctx.getSharedPreferences("rio_board", Context.MODE_PRIVATE).edit().putBoolean("bgon", true).putString("bgname", file).apply()
             RioBoardService.instance?.reloadBackground()
             true
         } catch (e: Exception) {
