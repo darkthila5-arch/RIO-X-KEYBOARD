@@ -44,7 +44,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS }
 
     private class Key(
         val label: String,
@@ -128,6 +128,11 @@ class RioBoardService : InputMethodService() {
     private var boomCountIdx = 1
     private var boomDelayIdx = 1
     private var boomRunning = false
+    private var statusItems: List<StatusSaver.Item>? = null
+    private var statusLoading = false
+    private var statusError = false
+    private val statusThumbs = HashMap<String, Bitmap>()
+    private val statusSaved = HashSet<String>()
     private var boomLeft = 0
     private var boomTotal = 0
     private var boomMsg = ""
@@ -384,6 +389,7 @@ class RioBoardService : InputMethodService() {
             Panel.SNIPS -> renderSnips()
             Panel.BACKGROUND -> renderBackgrounds()
             Panel.BOOM -> renderBoom()
+            Panel.STATUS -> renderStatus()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -440,11 +446,12 @@ class RioBoardService : InputMethodService() {
         add(IconView.Kind.EMOJI, panel == Panel.EMOJI) { togglePanel(Panel.EMOJI) }
         add(IconView.Kind.GLOBE) { flushSinglish(); siMode = !siMode; symbols = false; panel = Panel.NONE; render() }
         addText("A→අ", 13f, singlishOn) { setSinglish(!singlishOn) }
-        addText("🎤", 18f, false) { startVoice() }
+        add(IconView.Kind.MIC) { startVoice() }
         addText("Aa", 16f, fontStyle != 0 || rioStyle >= 0 || panel == Panel.FONTS) { togglePanel(Panel.FONTS) }
-        addText("⚡", 18f, panel == Panel.SNIPS) { togglePanel(Panel.SNIPS) }
-        addText("🖼️", 18f, panel == Panel.BACKGROUND || bgOn) { togglePanel(Panel.BACKGROUND) }
-        addText("💣", 18f, panel == Panel.BOOM || boomRunning) { togglePanel(Panel.BOOM) }
+        add(IconView.Kind.BOLT, panel == Panel.SNIPS) { togglePanel(Panel.SNIPS) }
+        add(IconView.Kind.IMAGE, panel == Panel.BACKGROUND || bgOn) { togglePanel(Panel.BACKGROUND) }
+        add(IconView.Kind.BOMB, panel == Panel.BOOM || boomRunning) { togglePanel(Panel.BOOM) }
+        add(IconView.Kind.STATUS, panel == Panel.STATUS) { statusItems = null; togglePanel(Panel.STATUS) }
         add(IconView.Kind.UNDO) { menuAction(android.R.id.undo) }
         add(IconView.Kind.REDO) { menuAction(android.R.id.redo) }
         add(IconView.Kind.LEFT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) }
@@ -822,6 +829,149 @@ class RioBoardService : InputMethodService() {
             setPadding(0, dp(6), 0, dp(4))
         }
         box.addView(boomStatus)
+        root.addView(panelBody(box))
+    }
+
+    // ----- WhatsApp status saver panel -----
+    private fun startStatusLoad(tree: android.net.Uri) {
+        if (statusLoading) return
+        statusLoading = true
+        statusError = false
+        Thread {
+            var items: List<StatusSaver.Item> = emptyList()
+            var failed = false
+            val thumbs = HashMap<String, Bitmap>()
+            try {
+                items = StatusSaver.list(this, tree).take(30)
+                items.forEach { it2 ->
+                    StatusSaver.thumb(this, it2)?.let { b -> thumbs[it2.uri.toString()] = b }
+                }
+            } catch (e: Exception) {
+                failed = true
+            }
+            handler.post {
+                statusThumbs.clear()
+                statusThumbs.putAll(thumbs)
+                statusItems = items
+                statusError = failed
+                statusLoading = false
+                if (::root.isInitialized && panel == Panel.STATUS) render()
+            }
+        }.start()
+    }
+
+    private fun saveStatus(item: StatusSaver.Item) {
+        Thread {
+            val ok = StatusSaver.saveToGallery(this, item)
+            handler.post {
+                if (ok) statusSaved.add(item.uri.toString())
+                android.widget.Toast.makeText(
+                    this,
+                    if (ok) "Saved to gallery" else "Could not save (storage permission?)",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+                if (::root.isInitialized && panel == Panel.STATUS) render()
+            }
+        }.start()
+    }
+
+    private fun renderStatus() {
+        root.addView(panelHeader("WhatsApp statuses", IconView.Kind.HISTORY) {
+            statusItems = null
+            render()
+        })
+        val tree = StatusSaver.treeUri(prefs)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(2), dp(8), dp(10))
+        }
+        if (tree == null) {
+            box.addView(hintText("Open the RIO BOARD app and allow the WhatsApp statuses folder once. Then watch a status in WhatsApp and come back here."))
+            box.addView(TextView(this).apply {
+                text = "Open RIO BOARD app"
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                background = roundBg(th.accent, 12)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply {
+                    setMargins(dp(3), dp(10), dp(3), dp(4))
+                }
+                isClickable = true
+                setOnClickListener { openApp() }
+            })
+            root.addView(panelBody(box))
+            return
+        }
+        val items = statusItems
+        if (items == null) {
+            startStatusLoad(tree)
+            box.addView(hintText("Loading statuses..."))
+            root.addView(panelBody(box))
+            return
+        }
+        if (items.isEmpty()) {
+            box.addView(
+                hintText(
+                    if (statusError) "Could not read the folder. Allow it again in the RIO BOARD app."
+                    else "No statuses yet. Watch a status in WhatsApp, then press refresh."
+                )
+            )
+            root.addView(panelBody(box))
+            return
+        }
+        box.addView(hintText("Tap a status to save it to your gallery."))
+        fun tile(item: StatusSaver.Item): View {
+            val key = item.uri.toString()
+            return FrameLayout(this).apply {
+                layoutParams = LinearLayout.LayoutParams(0, dp(96), 1f).apply { setMargins(dp(2), dp(2), dp(2), dp(2)) }
+                isClickable = true
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, dp(10).toFloat())
+                    }
+                }
+                setBackgroundColor(th.key)
+                val iv = android.widget.ImageView(this@RioBoardService).apply {
+                    scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                    statusThumbs[key]?.let { setImageBitmap(it) }
+                }
+                addView(iv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                if (item.isVideo) {
+                    addView(TextView(this@RioBoardService).apply {
+                        text = "\u25B6"
+                        setTextColor(Color.WHITE)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                        setShadowLayer(4f, 0f, 0f, Color.BLACK)
+                        setPadding(dp(6), 0, 0, dp(4))
+                    }, FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START
+                    ))
+                }
+                if (statusSaved.contains(key)) {
+                    addView(TextView(this@RioBoardService).apply {
+                        text = "\u2713 Saved"
+                        gravity = Gravity.CENTER
+                        setTextColor(Color.WHITE)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                        typeface = Typeface.DEFAULT_BOLD
+                        setBackgroundColor(Color.parseColor("#99000000"))
+                    }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                }
+                setOnClickListener {
+                    feedback(it)
+                    saveStatus(item)
+                }
+            }
+        }
+        items.chunked(3).forEach { rowItems ->
+            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            rowItems.forEach { r.addView(tile(it)) }
+            repeat(3 - rowItems.size) {
+                r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+            }
+            box.addView(r)
+        }
         root.addView(panelBody(box))
     }
 

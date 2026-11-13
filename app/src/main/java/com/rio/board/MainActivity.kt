@@ -5,6 +5,9 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
+import android.net.Uri
+import android.os.Build
+import android.provider.DocumentsContract
 import android.os.Bundle
 import android.provider.Settings
 import android.util.TypedValue
@@ -25,6 +28,7 @@ class MainActivity : Activity() {
     private lateinit var snipList: LinearLayout
     private lateinit var styleList: LinearLayout
     private var density = 1f
+    private var statusInfo: TextView? = null
 
     private fun dp(v: Int) = (v * density).toInt()
 
@@ -186,6 +190,29 @@ class MainActivity : Activity() {
             }
         })
 
+        // ----- WhatsApp status saver -----
+        layout.addView(heading("WhatsApp status saver"))
+        layout.addView(
+            note(
+                "1. Tap a button below and press \"Use this folder\" (the .Statuses folder is shown first).\n" +
+                    "2. Watch a status in WhatsApp.\n" +
+                    "3. Open the keyboard's status icon and tap a status to save it to your gallery.\n" +
+                    "Please only save statuses people are happy for you to keep."
+            )
+        )
+        layout.addView(Button(this).apply {
+            text = "Allow WhatsApp statuses"
+            setOnClickListener { pickStatusFolder(false) }
+        })
+        layout.addView(Button(this).apply {
+            text = "Allow WhatsApp Business statuses"
+            setOnClickListener { pickStatusFolder(true) }
+        })
+        val si = note("")
+        statusInfo = si
+        layout.addView(si)
+        refreshStatusInfo()
+
         layout.addView(heading("Fonts & voice"))
         layout.addView(
             note(
@@ -202,6 +229,55 @@ class MainActivity : Activity() {
         setContentView(scroll)
         refreshSnips()
         refreshStyles()
+    }
+
+    private fun refreshStatusInfo() {
+        statusInfo?.text = if (prefs.getString(StatusSaver.PREF_TREE, null) != null)
+            "Status folder allowed \u2713"
+        else
+            "No folder allowed yet"
+    }
+
+    private fun pickStatusFolder(business: Boolean) {
+        if (Build.VERSION.SDK_INT in 23..28) {
+            requestPermissions(arrayOf("android.permission.WRITE_EXTERNAL_STORAGE"), 22)
+        }
+        val pkg = if (business) "com.whatsapp.w4b" else "com.whatsapp"
+        val app = if (business) "WhatsApp%20Business" else "WhatsApp"
+        val path = if (Build.VERSION.SDK_INT >= 30) "Android%2Fmedia%2F$pkg%2F$app%2FMedia%2F.Statuses"
+        else "$app%2FMedia%2F.Statuses"
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+        i.addFlags(
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+        )
+        if (Build.VERSION.SDK_INT >= 26) {
+            i.putExtra(
+                DocumentsContract.EXTRA_INITIAL_URI,
+                Uri.parse("content://com.android.externalstorage.documents/document/primary%3A$path")
+            )
+        }
+        try {
+            startActivityForResult(i, 21)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Could not open the folder picker", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 21 && resultCode == RESULT_OK) {
+            val uri = data?.data
+            if (uri != null) {
+                try {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: Exception) {
+                }
+                prefs.edit().putString(StatusSaver.PREF_TREE, uri.toString()).apply()
+                refreshStatusInfo()
+                Toast.makeText(this, "Status folder allowed", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun heading(s: String) = TextView(this).apply {
