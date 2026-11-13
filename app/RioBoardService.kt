@@ -194,7 +194,7 @@ class RioBoardService : InputMethodService() {
         snowMode = prefs.getInt("snow", 2).coerceIn(0, 2)
         lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
         snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
-        effectIdx = prefs.getInt("effect", 0).coerceIn(0, 2)
+        effectIdx = prefs.getInt("effect", 0).coerceIn(0, 3)
         haptic = prefs.getBoolean("haptic", true)
         keyPreview = prefs.getBoolean("preview", true)
         boomCountIdx = prefs.getInt("boom_count", 1).coerceIn(0, boomCounts.size - 1)
@@ -1108,7 +1108,7 @@ class RioBoardService : InputMethodService() {
             setPadding(dp(8), dp(2), dp(8), dp(10))
         }
         box.addView(settingLabel("Effect"))
-        box.addView(chipRow(listOf("Snow ❄", "Water drops 💧", "Leaves 🍃"), effectIdx) {
+        box.addView(chipRow(listOf("Snow ❄", "Water drops 💧", "Leaves 🍃", "Flowers 🌸"), effectIdx) {
             effectIdx = it
             prefs.edit().putInt("effect", effectIdx).apply()
             if (snowMode == 0) setSnow(lastSnow) else { applySnow(); render() }

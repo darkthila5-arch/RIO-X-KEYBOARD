@@ -16,12 +16,13 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Transparent overlay with 3 effects: SNOW, DROPS (water drops sliding down glass), LEAVES (tumbling leaves).
+ * Transparent overlay with 4 effects: SNOW, DROPS (water drops sliding down glass),
+ * LEAVES (tumbling leaves), FLOWERS (realistic falling petals).
  * Replaces SnowView (same API + [type] + [natural]). Does not consume touches.
  */
 class EffectView(context: Context) : View(context) {
 
-    enum class Type { SNOW, DROPS, LEAVES }
+    enum class Type { SNOW, DROPS, LEAVES, FLOWERS }
 
     // ---------- public API (same as SnowView) ----------
     var type: Type = Type.SNOW
@@ -37,7 +38,7 @@ class EffectView(context: Context) : View(context) {
     /** One colour, or several (each particle gets one of them). */
     var colors: IntArray = intArrayOf(Color.WHITE)
 
-    /** true = use the built-in natural look (autumn leaves / clear water) instead of [colors]. */
+    /** true = use the built-in natural look (autumn leaves / clear water / sakura petals) instead of [colors]. */
     var natural: Boolean = false
 
     var base: Int = 45
@@ -57,9 +58,10 @@ class EffectView(context: Context) : View(context) {
     fun burst() {
         if (!running || width == 0) return
         when (type) {
-            Type.SNOW -> repeat(4) { if (flakes.size < 150) flakes.add(newFlake(true)) }
-            Type.DROPS -> repeat(3) { if (drops.size < maxDrops()) drops.add(newDrop(false, true)) }
-            Type.LEAVES -> repeat(2) { if (leaves.size < 40) leaves.add(newLeaf(true)) }
+            Type.SNOW    -> repeat(4) { if (flakes.size < 150) flakes.add(newFlake(true)) }
+            Type.DROPS   -> repeat(3) { if (drops.size < maxDrops()) drops.add(newDrop(false, true)) }
+            Type.LEAVES  -> repeat(2) { if (leaves.size < 40) leaves.add(newLeaf(true)) }
+            Type.FLOWERS -> repeat(3) { if (petals.size < maxPetals()) petals.add(newPetal(true)) }
         }
     }
 
@@ -71,6 +73,7 @@ class EffectView(context: Context) : View(context) {
 
     private fun clearAll() {
         flakes.clear(); drops.clear(); trails.clear(); leaves.clear(); leavesFilled = false
+        petals.clear(); petalsFilled = false
     }
 
     private fun palette(): IntArray = if (colors.isEmpty()) intArrayOf(Color.WHITE) else colors
@@ -86,9 +89,10 @@ class EffectView(context: Context) : View(context) {
         canvas.save()
         canvas.clipRect(0f, topLimit, width.toFloat(), height.toFloat())
         when (type) {
-            Type.SNOW -> drawSnow(canvas, dt)
-            Type.DROPS -> drawDrops(canvas, dt)
-            Type.LEAVES -> drawLeaves(canvas, dt)
+            Type.SNOW    -> drawSnow(canvas, dt)
+            Type.DROPS   -> drawDrops(canvas, dt)
+            Type.LEAVES  -> drawLeaves(canvas, dt)
+            Type.FLOWERS -> drawFlowers(canvas, dt)
         }
         canvas.restore()
         postInvalidateOnAnimation()
@@ -198,7 +202,7 @@ class EffectView(context: Context) : View(context) {
         val big = rnd.nextFloat() < 0.18f
         val r = when {
             tiny -> (0.9f + rnd.nextFloat() * 1.3f) * d
-            big -> (3.5f + rnd.nextFloat() * 2.5f) * d
+            big  -> (3.5f + rnd.nextFloat() * 2.5f) * d
             else -> (1.2f + rnd.nextFloat() * 2.6f) * d
         }
         val dr = Drop(
@@ -236,12 +240,12 @@ class EffectView(context: Context) : View(context) {
         c.drawCircle(0f, 0f, 1f, ringP)
         if (r > 2.2f * d) {
             rimP.alpha = (110 * a).toInt()
-            c.drawArc(arcRect, 20f, 70f, false, rimP)       // light refracted at the lower edge
+            c.drawArc(arcRect, 20f, 70f, false, rimP)
             specP.alpha = (150 * a).toInt()
-            c.drawCircle(-0.08f, -0.64f, 0.09f, specP)     // small second glint
+            c.drawCircle(-0.08f, -0.64f, 0.09f, specP)
         }
         specP.alpha = (235 * a).toInt()
-        c.drawCircle(-0.38f, -0.40f, 0.2f, specP)          // main specular highlight
+        c.drawCircle(-0.38f, -0.40f, 0.2f, specP)
         c.restore()
     }
 
@@ -249,7 +253,6 @@ class EffectView(context: Context) : View(context) {
         val target = (base * 0.9f).toInt()
         while (drops.size < target) drops.add(newDrop(drops.size < target / 2))
 
-        // fading trails
         var i = 0
         while (i < trails.size) {
             val t = trails[i]
@@ -266,7 +269,6 @@ class EffectView(context: Context) : View(context) {
         while (i < drops.size) {
             val dr = drops[i]
             if (!dr.sliding) {
-                // appear, slowly grow, eventually fade away or start sliding
                 if (!dr.dying && dr.a < 1f) dr.a = minOf(1f, dr.a + dt * 2.2f)
                 dr.r += dr.grow * dt * 0.5f
                 dr.life -= dt
@@ -282,7 +284,6 @@ class EffectView(context: Context) : View(context) {
                 }
                 drawDropShape(canvas, dr.x, dr.y, dr.r, 1.06f, dr.a, dropTint(dr.ci))
             } else {
-                // sliding: accelerate, sudden stops, shrink as it leaves water behind
                 if (dr.pause > 0f) {
                     dr.pause -= dt
                     dr.vy *= (1f - 6f * dt).coerceAtLeast(0f)
@@ -295,7 +296,6 @@ class EffectView(context: Context) : View(context) {
                 dr.y += dist
                 dr.r -= dist * 0.0045f
                 dr.spawnAcc += dist
-                // leave tiny droplets behind
                 if (dr.spawnAcc > 34f * d) {
                     dr.spawnAcc = 0f
                     if (drops.size < maxDrops() && rnd.nextFloat() < 0.7f) {
@@ -310,7 +310,6 @@ class EffectView(context: Context) : View(context) {
                     }
                 }
                 val gone = dr.r < 1.6f * d || dr.y - dr.r > height
-                // live trail: wet streak from where it started to the drop
                 trailP.strokeWidth = dr.trailW * (dr.r / dr.slideAt).coerceIn(0.4f, 1f)
                 trailP.alpha = 34
                 tintFor(trailP, dr.ci)
@@ -355,14 +354,13 @@ class EffectView(context: Context) : View(context) {
         0xFF8BC34A.toInt(), 0xFF689F38.toInt(), 0xFF8D6E63.toInt(), 0xFFC62828.toInt()
     )
 
-    // unit leaf: tip (0,-1) -> base (0,1), width +-0.7
     private val leafPath = Path().apply {
         moveTo(0f, -1f)
         cubicTo(0.85f, -0.5f, 0.75f, 0.5f, 0f, 1f)
         cubicTo(-0.75f, 0.5f, -0.85f, -0.5f, 0f, -1f)
         close()
     }
-    private val leafHalf = Path().apply {          // right half, drawn darker for depth
+    private val leafHalf = Path().apply {
         moveTo(0f, -1f)
         cubicTo(0.85f, -0.5f, 0.75f, 0.5f, 0f, 1f)
         close()
@@ -431,19 +429,16 @@ class EffectView(context: Context) : View(context) {
             canvas.rotate(rot)
             canvas.scale(l.size * 0.62f * sxAbs, l.size)
 
-            // leaf body (back side a little darker when flipped)
             paint.style = Paint.Style.FILL
             paint.shader = null
             paint.color = if (sx >= 0f) l.color else l.dark
             paint.alpha = if (sx >= 0f) 235 else 215
             canvas.drawPath(leafPath, paint)
 
-            // shaded half for depth
             paint.color = l.dark
             paint.alpha = if (sx >= 0f) 70 else 40
             canvas.drawPath(leafHalf, paint)
 
-            // midrib, side veins, stem
             veinP.color = l.dark
             veinP.alpha = 190
             canvas.drawLine(0f, -0.9f, 0f, 1.0f, veinP)
@@ -456,6 +451,210 @@ class EffectView(context: Context) : View(context) {
             }
             veinP.alpha = 210
             canvas.drawLine(0f, 1.0f, 0f, 1.35f, veinP)
+            canvas.restore()
+        }
+    }
+
+    // =====================================================================
+    //  FLOWERS – realistic falling flower petals (sakura / rose / custom).
+    //
+    //  Each petal is a smooth teardrop shape drawn with cubicTo bezier
+    //  curves.  Physics: gravity + gentle air-drag + horizontal wind drift
+    //  + sinusoidal sway.  3-D feel: petal flips around its long axis
+    //  (cos-scaled scaleX), back-face is a darker tint.  A soft radial
+    //  gradient gives the petal a slightly lighter centre so it looks
+    //  paper-thin rather than flat.  A tiny white specular dot sits at the
+    //  upper-left for a slightly waxy / glossy petal look.
+    // =====================================================================
+
+    /** One falling petal. All angles in radians unless noted. */
+    private class Petal(
+        var x: Float,          // screen X (updated each frame)
+        var y: Float,          // screen Y
+        val w: Float,          // half-width of petal (pre-scaled to dp)
+        val h: Float,          // half-height of petal
+        val vy: Float,         // base downward speed (dp/s)
+        var vx: Float,         // lateral speed (dp/s, can be negative)
+        var phase: Float,      // sway oscillation phase
+        val swayAmp: Float,    // horizontal sway amplitude (dp)
+        val swayFreq: Float,   // sway frequency (rad/s)
+        var tilt: Float,       // current 3-D flip angle (radians)
+        val tiltSpd: Float,    // flip speed (rad/s)
+        var spin: Float,       // in-plane rotation angle (degrees)
+        val spinSpd: Float,    // in-plane rotation speed (deg/s)
+        val baseColor: Int,    // face colour
+        val darkColor: Int,    // back-face / shadow colour
+        val alpha: Int         // 160-255
+    )
+
+    private val petals = ArrayList<Petal>()
+    private var petalsFilled = false
+
+    // natural sakura palette – soft pinks and near-whites
+    private val sakura = intArrayOf(
+        0xFFFFB7C5.toInt(), // sakura pink
+        0xFFFF8FAB.toInt(), // deeper rose
+        0xFFFFC0CB.toInt(), // classic pink
+        0xFFFFD1DC.toInt(), // blush
+        0xFFFFECF1.toInt(), // near white petal
+        0xFFE91E8C.toInt(), // vivid pink accent
+        0xFFFF6F91.toInt(), // coral petal
+        0xFFF8BBD0.toInt()  // pale rose
+    )
+
+    // unit petal path: tip at (0, -1), base at (0, 1), max width ~±0.65 at y≈0
+    // Looks like a rounded teardrop / rose petal.
+    private val petalPath = Path().apply {
+        moveTo(0f, -1f)
+        cubicTo( 0.70f, -0.55f,  0.68f,  0.45f, 0f,  1f)
+        cubicTo(-0.68f,  0.45f, -0.70f, -0.55f, 0f, -1f)
+        close()
+    }
+
+    // Right half darker for depth
+    private val petalRight = Path().apply {
+        moveTo(0f, -1f)
+        cubicTo(0.70f, -0.55f, 0.68f, 0.45f, 0f, 1f)
+        close()
+    }
+
+    private val petalFillP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val petalShadeP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val petalSpecP  = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL; color = Color.WHITE
+    }
+    private val petalVeinP  = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+
+    private fun maxPetals() = maxOf(20, base)
+
+    private fun petalColor(): Pair<Int, Int> {
+        val col: Int = if (natural) {
+            sakura[rnd.nextInt(sakura.size)]
+        } else {
+            val pal = palette()
+            val c0 = pal[rnd.nextInt(pal.size)]
+            Color.colorToHSV(c0, hsv)
+            // slightly randomize brightness so not all petals look identical
+            hsv[1] = (hsv[1] * (0.6f + rnd.nextFloat() * 0.4f)).coerceIn(0f, 1f)
+            hsv[2] = (hsv[2] * (0.75f + rnd.nextFloat() * 0.35f)).coerceIn(0.25f, 1f)
+            Color.HSVToColor(hsv)
+        }
+        // darker variant for back-face and right-half shadow
+        Color.colorToHSV(col, hsv)
+        hsv[2] = (hsv[2] * 0.58f).coerceAtLeast(0.05f)
+        hsv[1] = (hsv[1] * 1.15f).coerceIn(0f, 1f)
+        val dark = Color.HSVToColor(hsv)
+        return col to dark
+    }
+
+    private fun newPetal(fromTop: Boolean): Petal {
+        val size = (5f + rnd.nextFloat() * 9f) * d  // 5-14 dp half-height
+        val aspect = 0.52f + rnd.nextFloat() * 0.26f // width/height ratio 0.52-0.78
+        val span = (height - topLimit).coerceAtLeast(1f)
+        val y = if (fromTop) topLimit - size * 2f - rnd.nextFloat() * 60f * d
+                else         topLimit + rnd.nextFloat() * span
+
+        val (col, dark) = petalColor()
+
+        return Petal(
+            x          = rnd.nextFloat() * width,
+            y          = y,
+            w          = size * aspect,
+            h          = size,
+            vy         = (22f + rnd.nextFloat() * 38f) * d,   // 22-60 dp/s fall speed
+            vx         = (rnd.nextFloat() - 0.5f) * 18f * d,  // initial lateral drift
+            phase      = rnd.nextFloat() * 6.28f,
+            swayAmp    = (12f + rnd.nextFloat() * 28f) * d,   // 12-40 dp sway
+            swayFreq   = 0.7f + rnd.nextFloat() * 1.1f,       // sway cycles/s
+            tilt       = rnd.nextFloat() * 6.28f,
+            tiltSpd    = (0.9f + rnd.nextFloat() * 1.8f) * (if (rnd.nextBoolean()) 1f else -1f),
+            spin       = rnd.nextFloat() * 360f,
+            spinSpd    = (8f + rnd.nextFloat() * 25f) * (if (rnd.nextBoolean()) 1f else -1f),
+            baseColor  = col,
+            darkColor  = dark,
+            alpha      = (165 + rnd.nextInt(80))               // 165-245
+        )
+    }
+
+    private fun drawFlowers(canvas: Canvas, dt: Float) {
+        val target = maxOf(12, base / 3)
+        while (petals.size < target) petals.add(newPetal(petalsFilled))
+        petalsFilled = true
+
+        val iter = petals.iterator()
+        while (iter.hasNext()) {
+            val p = iter.next()
+
+            // --- physics ---
+            p.phase += p.swayFreq * dt
+            // sinusoidal sway changes lateral velocity smoothly
+            p.vx += (sin(p.phase) * p.swayAmp * p.swayFreq * 2.5f - p.vx * 0.4f) * dt
+            // gentle air drag on downward speed
+            p.y  += (p.vy + cos(p.tilt) * p.vy * 0.12f) * dt
+            p.x  += p.vx * dt
+            p.tilt += p.tiltSpd * dt
+            p.spin += p.spinSpd * dt
+
+            // wrap X (petals drift off screen, respawn on other side)
+            if (p.x < -p.w * 3f)  p.x = width  + p.w * 2f
+            if (p.x > width + p.w * 3f) p.x = -p.w * 2f
+
+            // remove once fully below screen
+            if (p.y - p.h * 2f > height) {
+                iter.remove()
+                continue
+            }
+
+            // --- 3-D flip: cos of tilt gives apparent width scale ---
+            val flipScale = cos(p.tilt)
+            val absFlip  = maxOf(0.08f, abs(flipScale))  // never fully flat
+            val facingFront = flipScale >= 0f
+
+            canvas.save()
+            canvas.translate(p.x, p.y)
+            canvas.rotate(p.spin)
+            canvas.scale(p.w * absFlip, p.h)       // non-uniform: width flips, height stable
+
+            // --- back face (shown when flipped, slightly darker) ---
+            if (!facingFront) {
+                petalFillP.color = p.darkColor
+                petalFillP.alpha = (p.alpha * 0.80f).toInt()
+                canvas.drawPath(petalPath, petalFillP)
+            } else {
+                // --- front face ---
+                petalFillP.color = p.baseColor
+                petalFillP.alpha = p.alpha
+                canvas.drawPath(petalPath, petalFillP)
+
+                // right-half shadow for petal curl / depth
+                petalShadeP.color = p.darkColor
+                petalShadeP.alpha = (p.alpha * 0.28f).toInt()
+                canvas.drawPath(petalRight, petalShadeP)
+
+                // central vein  (midrib from tip to base)
+                Color.colorToHSV(p.darkColor, hsv)
+                hsv[2] = (hsv[2] * 0.75f).coerceAtLeast(0.03f)
+                petalVeinP.color = Color.HSVToColor(hsv)
+                petalVeinP.alpha = (p.alpha * 0.55f).toInt()
+                petalVeinP.strokeWidth = 0.055f   // in petal-local units
+                canvas.drawLine(0f, -0.82f, 0f, 0.78f, petalVeinP)
+
+                // two side veins
+                petalVeinP.alpha = (p.alpha * 0.30f).toInt()
+                petalVeinP.strokeWidth = 0.035f
+                canvas.drawLine(0f, -0.35f,  0.38f, 0.25f, petalVeinP)
+                canvas.drawLine(0f, -0.35f, -0.38f, 0.25f, petalVeinP)
+                canvas.drawLine(0f,  0.15f,  0.28f, 0.65f, petalVeinP)
+                canvas.drawLine(0f,  0.15f, -0.28f, 0.65f, petalVeinP)
+
+                // small specular glint near tip
+                petalSpecP.alpha = (p.alpha * 0.55f).toInt()
+                canvas.drawCircle(-0.22f, -0.60f, 0.10f, petalSpecP)
+            }
+
             canvas.restore()
         }
     }
