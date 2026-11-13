@@ -805,6 +805,8 @@ class RioBoardService : InputMethodService() {
                 removeBackground()
             }
         })
+        box.addView(settingLabel("Default backgrounds"))
+        box.addView(DefaultBackgrounds.strip(this))
         box.addView(TextView(this).apply {
             text = "Open RIO BOARD app"
             gravity = Gravity.CENTER

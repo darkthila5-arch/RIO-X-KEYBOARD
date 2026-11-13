@@ -171,6 +171,8 @@ class MainActivity : Activity() {
                 startActivity(Intent(this@MainActivity, PickImageActivity::class.java))
             }
         })
+        layout.addView(note("Or pick one of the built-in backgrounds:"))
+        layout.addView(DefaultBackgrounds.strip(this))
         layout.addView(Button(this).apply {
             text = "Remove photo"
             setOnClickListener {
