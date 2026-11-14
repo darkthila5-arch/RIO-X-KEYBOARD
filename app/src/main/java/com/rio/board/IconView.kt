@@ -12,7 +12,7 @@ import android.view.View
 /** Simple line icons drawn in code (no image files needed). */
 class IconView(context: Context, private val kind: Kind) : View(context) {
 
-    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN, STICKER, CLOSE, LOCK, CALC }
+    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN, STICKER, CLOSE, LOCK, CALC, KEYSTYLE }
 
     var tint: Int = Color.WHITE
         set(value) {
@@ -205,6 +205,18 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
                 path.lineTo(12f, 15.2f)
                 path.lineTo(15.5f, 11.5f)
                 c.drawPath(path, p)
+            }
+            Kind.KEYSTYLE -> {
+                c.drawRoundRect(RectF(3.5f, 8f, 15.5f, 20f), 3.5f, 3.5f, p)
+                path.reset()
+                path.moveTo(18f, 2.5f)
+                path.quadTo(18f, 6f, 21.5f, 6f)
+                path.quadTo(18f, 6f, 18f, 9.5f)
+                path.quadTo(18f, 6f, 14.5f, 6f)
+                path.quadTo(18f, 6f, 18f, 2.5f)
+                path.close()
+                c.drawPath(path, fill)
+                c.drawCircle(9.5f, 14f, 1.3f, fill)
             }
             Kind.CALC -> {
                 c.drawRoundRect(RectF(5f, 3.5f, 19f, 20.5f), 2.5f, 2.5f, p)

@@ -44,7 +44,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO, CALC }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO, CALC, KEYSTYLE }
 
     private class Key(
         val label: String,
@@ -169,6 +169,8 @@ class RioBoardService : InputMethodService() {
     private var bgOn = false
     private var bgBitmap: Bitmap? = null
     private var pendingVoice: String? = null
+    private var keyTpl = 0
+    private var keyDecor = 0
     private var passwordField = false
     private var pendingInsert: String? = null
     private var pendingInsertAt = 0L
@@ -210,6 +212,8 @@ class RioBoardService : InputMethodService() {
         snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
         effectIdx = prefs.getInt("effect", 0).coerceIn(0, EffectView.Type.values().size - 1)
         loadPinned()
+        keyTpl = prefs.getInt("ktpl", 0).coerceIn(0, KeyStyles.templates.size - 1)
+        keyDecor = prefs.getInt("kdecor", 0).coerceIn(0, KeyStyles.decors.size - 1)
         haptic = prefs.getBoolean("haptic", true)
         keyPreview = prefs.getBoolean("preview", true)
         boomCountIdx = prefs.getInt("boom_count", 1).coerceIn(0, boomCounts.size - 1)
@@ -424,6 +428,7 @@ class RioBoardService : InputMethodService() {
             Panel.TOOLS -> renderTools()
             Panel.CRYPTO -> renderCrypto()
             Panel.CALC -> renderCalc()
+            Panel.KEYSTYLE -> renderKeyStyle()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -491,6 +496,7 @@ class RioBoardService : InputMethodService() {
             ic("right", "Right", 3, IconView.Kind.RIGHT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) },
             ic("end", "End", 3, IconView.Kind.END) { sendDownUpKeyEvents(KeyEvent.KEYCODE_MOVE_END) },
             // 4 look & extras
+            ic("keystyle", "Key style", 4, IconView.Kind.KEYSTYLE, { panel == Panel.KEYSTYLE }) { togglePanel(Panel.KEYSTYLE) },
             ic("bg", "Background", 4, IconView.Kind.IMAGE, { panel == Panel.BACKGROUND || bgOn }) { togglePanel(Panel.BACKGROUND) },
             ic("effects", "Effects", 4, IconView.Kind.SNOW, { snowMode != 0 }) { setSnow(if (snowMode != 0) 0 else lastSnow) },
             ic("theme", "Theme", 4, IconView.Kind.THEME, { panel == Panel.THEME }) { togglePanel(Panel.THEME) },
@@ -788,6 +794,65 @@ class RioBoardService : InputMethodService() {
             addState(intArrayOf(android.R.attr.state_pressed), shape(th.pressed))
             addState(intArrayOf(), shape(color))
         }
+    }
+
+    /** Key background for the chosen key style (template + corner decoration). */
+    private fun keyBg(color: Int, label: String): android.graphics.drawable.Drawable {
+        if (keyTpl == 0 && keyDecor == 0) return roundBg(color, 8)
+        val dens = resources.displayMetrics.density
+        val seed = label.hashCode()
+        return StateListDrawable().apply {
+            addState(
+                intArrayOf(android.R.attr.state_pressed),
+                KeyDrawable(dens, keyTpl, kc(th.pressed), th.accent, true, keyDecor, seed)
+            )
+            addState(intArrayOf(), KeyDrawable(dens, keyTpl, kc(color), th.accent, false, keyDecor, seed))
+        }
+    }
+
+    // ----- key style panel: live sample keys + template and decoration pickers -----
+    private fun renderKeyStyle() {
+        root.addView(panelHeader("Key style"))
+        val sample = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
+            setPadding(dp(4), 0, dp(4), 0)
+        }
+        sample.addView(keyView(Key("Q", 1f, Style.NORMAL, 19f) {}))
+        sample.addView(keyView(Key("W", 1f, Style.NORMAL, 19f) {}))
+        sample.addView(keyView(Key("E", 1f, Style.NORMAL, 19f) {}))
+        sample.addView(keyView(Key("?123", 1.4f, Style.SPECIAL, 14f) {}))
+        sample.addView(keyView(Key("RIO", 2f, Style.NORMAL, 13f, space = true) {}))
+        sample.addView(keyView(Key("↵", 1.3f, Style.ACCENT, 20f) {}))
+        root.addView(sample)
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), 0, dp(6), dp(10))
+        }
+        fun pick(options: List<String>, selected: Int, onPick: (Int) -> Unit) {
+            options.chunked(4).forEachIndexed { r, rowOpts ->
+                val base = r * 4
+                box.addView(chipRow(rowOpts, selected - base) { onPick(base + it) })
+            }
+        }
+        box.addView(settingLabel("Template"))
+        pick(KeyStyles.templates, keyTpl) {
+            keyTpl = it
+            prefs.edit().putInt("ktpl", keyTpl).apply()
+            render()
+        }
+        box.addView(settingLabel("Decoration"))
+        pick(KeyStyles.decors, keyDecor) {
+            keyDecor = it
+            prefs.edit().putInt("kdecor", keyDecor).apply()
+            render()
+        }
+        root.addView(ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH * 3))
+            isVerticalScrollBarEnabled = false
+            addView(box)
+        })
     }
 
     private fun feedback(v: View) {
@@ -1701,13 +1766,13 @@ class RioBoardService : InputMethodService() {
             tv.letterSpacing = 0.2f
             tv.typeface = Typeface.DEFAULT_BOLD
         }
-        tv.background = roundBg(
+        tv.background = keyBg(
             when (k.style) {
                 Style.NORMAL -> th.key
                 Style.SPECIAL -> th.special
                 Style.ACCENT -> th.accent
                 Style.ACTIVE -> th.active
-            }, 8
+            }, k.label
         )
         tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, k.weight).apply {
             setMargins(dp(2), dp(3), dp(2), dp(3))
