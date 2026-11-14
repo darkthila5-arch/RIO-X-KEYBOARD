@@ -12,7 +12,7 @@ import android.view.View
 /** Simple line icons drawn in code (no image files needed). */
 class IconView(context: Context, private val kind: Kind) : View(context) {
 
-    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS }
+    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN }
 
     var tint: Int = Color.WHITE
         set(value) {
@@ -204,6 +204,47 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
                 path.moveTo(8.5f, 11.5f)
                 path.lineTo(12f, 15.2f)
                 path.lineTo(15.5f, 11.5f)
+                c.drawPath(path, p)
+            }
+            Kind.CALENDAR -> {
+                c.drawRoundRect(RectF(4f, 5f, 20f, 20f), 2.5f, 2.5f, p)
+                c.drawLine(4f, 10f, 20f, 10f, p)
+                c.drawLine(8.5f, 3f, 8.5f, 7f, p)
+                c.drawLine(15.5f, 3f, 15.5f, 7f, p)
+                c.drawCircle(8.5f, 13.8f, 1f, fill)
+                c.drawCircle(12f, 13.8f, 1f, fill)
+                c.drawCircle(15.5f, 13.8f, 1f, fill)
+                c.drawCircle(8.5f, 17f, 1f, fill)
+                c.drawCircle(12f, 17f, 1f, fill)
+            }
+            Kind.HOME -> {
+                c.drawLine(5.5f, 5f, 5.5f, 19f, p)
+                path.reset()
+                path.moveTo(17f, 6f)
+                path.lineTo(10f, 12f)
+                path.lineTo(17f, 18f)
+                c.drawPath(path, p)
+            }
+            Kind.END -> {
+                c.drawLine(18.5f, 5f, 18.5f, 19f, p)
+                path.reset()
+                path.moveTo(7f, 6f)
+                path.lineTo(14f, 12f)
+                path.lineTo(7f, 18f)
+                c.drawPath(path, p)
+            }
+            Kind.UP -> {
+                path.reset()
+                path.moveTo(5f, 15f)
+                path.lineTo(12f, 8f)
+                path.lineTo(19f, 15f)
+                c.drawPath(path, p)
+            }
+            Kind.DOWN -> {
+                path.reset()
+                path.moveTo(5f, 9f)
+                path.lineTo(12f, 16f)
+                path.lineTo(19f, 9f)
                 c.drawPath(path, p)
             }
             Kind.TRASH -> {

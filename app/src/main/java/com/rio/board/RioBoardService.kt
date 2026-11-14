@@ -145,6 +145,7 @@ class RioBoardService : InputMethodService() {
     private var keyHIdx = 1
     private var panel = Panel.NONE
     private var toolbarX = 0
+    private var clearArmed = false
     private var toolsPinned = false
     private var suggestions: List<String> = emptyList()
     private val clips = ArrayList<String>()
@@ -441,26 +442,60 @@ class RioBoardService : InputMethodService() {
             }
             bar.addView(b)
         }
+        fun divider() {
+            bar.addView(View(this).apply {
+                setBackgroundColor(th.special)
+                alpha = 0.6f
+                layoutParams = LinearLayout.LayoutParams(dp(1), dp(22)).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    setMargins(dp(5), 0, dp(5), 0)
+                }
+            })
+        }
+
+        // 1) input: paste, clipboard, emoji, language, voice
         add(IconView.Kind.CLIPBOARD) { pasteNow() }
         add(IconView.Kind.HISTORY, panel == Panel.CLIPBOARD) { togglePanel(Panel.CLIPBOARD) }
         add(IconView.Kind.EMOJI, panel == Panel.EMOJI) { togglePanel(Panel.EMOJI) }
         add(IconView.Kind.GLOBE) { flushSinglish(); siMode = !siMode; symbols = false; panel = Panel.NONE; render() }
         addText("A→අ", 13f, singlishOn) { setSinglish(!singlishOn) }
         add(IconView.Kind.MIC) { startVoice() }
+        divider()
+
+        // 2) text: fonts, snippets, change case, date & time
         addText("Aa", 16f, fontStyle != 0 || rioStyle >= 0 || panel == Panel.FONTS) { togglePanel(Panel.FONTS) }
         add(IconView.Kind.BOLT, panel == Panel.SNIPS) { togglePanel(Panel.SNIPS) }
-        add(IconView.Kind.IMAGE, panel == Panel.BACKGROUND || bgOn) { togglePanel(Panel.BACKGROUND) }
-        add(IconView.Kind.BOMB, panel == Panel.BOOM || boomRunning) { togglePanel(Panel.BOOM) }
-        add(IconView.Kind.STATUS, panel == Panel.STATUS) { statusItems = null; togglePanel(Panel.STATUS) }
-        add(IconView.Kind.UNDO) { menuAction(android.R.id.undo) }
-        add(IconView.Kind.REDO) { menuAction(android.R.id.redo) }
-        add(IconView.Kind.LEFT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) }
-        add(IconView.Kind.RIGHT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) }
+        addText("a⇄A", 13f, false) { changeCase() }
+        add(IconView.Kind.CALENDAR) { insertDateTime() }
+        divider()
+
+        // 3) edit: select, copy, cut, undo, redo, clear
         add(IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) }
         add(IconView.Kind.COPY) { menuAction(android.R.id.copy) }
         add(IconView.Kind.CUT) { menuAction(android.R.id.cut) }
+        add(IconView.Kind.UNDO) { menuAction(android.R.id.undo) }
+        add(IconView.Kind.REDO) { menuAction(android.R.id.redo) }
+        add(IconView.Kind.TRASH, clearArmed) { clearAllText() }
+        divider()
+
+        // 4) cursor: home, left, up, down, right, end
+        add(IconView.Kind.HOME) { sendDownUpKeyEvents(KeyEvent.KEYCODE_MOVE_HOME) }
+        add(IconView.Kind.LEFT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) }
+        add(IconView.Kind.UP) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_UP) }
+        add(IconView.Kind.DOWN) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_DOWN) }
+        add(IconView.Kind.RIGHT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) }
+        add(IconView.Kind.END) { sendDownUpKeyEvents(KeyEvent.KEYCODE_MOVE_END) }
+        divider()
+
+        // 5) look & extras: background, effects, theme, boom, status saver
+        add(IconView.Kind.IMAGE, panel == Panel.BACKGROUND || bgOn) { togglePanel(Panel.BACKGROUND) }
         add(IconView.Kind.SNOW, snowMode != 0) { setSnow(if (snowMode != 0) 0 else lastSnow) }
         add(IconView.Kind.THEME, panel == Panel.THEME) { togglePanel(Panel.THEME) }
+        add(IconView.Kind.BOMB, panel == Panel.BOOM || boomRunning) { togglePanel(Panel.BOOM) }
+        add(IconView.Kind.STATUS, panel == Panel.STATUS) { statusItems = null; togglePanel(Panel.STATUS) }
+        divider()
+
+        // 6) settings
         add(IconView.Kind.SETTINGS, panel == Panel.SETTINGS) { togglePanel(Panel.SETTINGS) }
         hsv.addView(
             bar,
@@ -1612,6 +1647,73 @@ class RioBoardService : InputMethodService() {
         }
         val s = if (!text.isNullOrEmpty()) text else clips.firstOrNull()
         if (!s.isNullOrEmpty()) type(s)
+    }
+
+    private fun toast(msg: String) {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    /** Clear everything in the field. First tap arms it, second tap (within 2 s) clears. */
+    private fun clearAllText() {
+        val ic = currentInputConnection ?: return
+        flushSinglish()
+        if (!clearArmed) {
+            clearArmed = true
+            toast("Tap again to clear all text")
+            refreshBar()
+            handler.postDelayed({ clearArmed = false; refreshBar() }, 2000)
+            return
+        }
+        clearArmed = false
+        ic.beginBatchEdit()
+        val sel = ic.getSelectedText(0)
+        if (!sel.isNullOrEmpty()) ic.commitText("", 1)
+        val before = ic.getTextBeforeCursor(100000, 0)?.length ?: 0
+        val after = ic.getTextAfterCursor(100000, 0)?.length ?: 0
+        ic.deleteSurroundingText(before, after)
+        ic.endBatchEdit()
+        refreshBar()
+    }
+
+    /** Selected text (or the word before the cursor): UPPER -> lower -> Title -> UPPER ... */
+    private fun changeCase() {
+        val ic = currentInputConnection ?: return
+        flushSinglish()
+        val sel = ic.getSelectedText(0)?.toString()
+        val hasSel = !sel.isNullOrEmpty()
+        val src: String = if (hasSel) {
+            sel!!
+        } else {
+            val b = ic.getTextBeforeCursor(40, 0)?.toString() ?: return
+            var i = b.length
+            while (i > 0 && isWordChar(b[i - 1])) i--
+            b.substring(i)
+        }
+        if (src.isEmpty()) {
+            toast("Select some text first")
+            return
+        }
+        val out = when {
+            src == src.uppercase() && src != src.lowercase() -> src.lowercase()
+            src == src.lowercase() -> src.split(" ").joinToString(" ") { w ->
+                w.lowercase().replaceFirstChar { it.uppercase() }
+            }
+            else -> src.uppercase()
+        }
+        ic.beginBatchEdit()
+        if (!hasSel) ic.deleteSurroundingText(src.length, 0)
+        ic.commitText(out, 1)
+        if (hasSel) {
+            // keep the text selected so the button can be tapped again to cycle
+            val end = ic.getTextBeforeCursor(100000, 0)?.length ?: 0
+            ic.setSelection(end - out.length, end)
+        }
+        ic.endBatchEdit()
+    }
+
+    private fun insertDateTime() {
+        val f = java.text.SimpleDateFormat("yyyy-MM-dd  HH:mm", java.util.Locale.getDefault())
+        type(f.format(java.util.Date()))
     }
 
     private fun menuAction(id: Int) {
