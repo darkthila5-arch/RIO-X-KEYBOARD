@@ -1,11 +1,16 @@
 package com.rio.board
 
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PointF
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
@@ -54,8 +59,47 @@ class RioBoardService : InputMethodService() {
         val repeat: Boolean = false,
         val space: Boolean = false,
         val onLong: (() -> Unit)? = null,
+        val alts: List<String> = emptyList(),   // long-press popup choices
+        val letter: Char? = null,               // set on English letter keys (swipe typing)
         val onPress: () -> Unit
     )
+
+    /** Thin line that follows the finger while swipe-typing. */
+    private class TrailView(ctx: Context) : View(ctx) {
+        private val pts = ArrayList<PointF>()
+        private val path = Path()
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 9f
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        var color: Int = Color.WHITE
+
+        fun add(rawX: Float, rawY: Float) {
+            val l = IntArray(2)
+            getLocationOnScreen(l)
+            pts.add(PointF(rawX - l[0], rawY - l[1]))
+            if (pts.size > 80) pts.removeAt(0)
+            invalidate()
+        }
+
+        fun clear() {
+            if (pts.isNotEmpty()) {
+                pts.clear()
+                invalidate()
+            }
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            if (pts.size < 2) return
+            path.reset()
+            path.moveTo(pts[0].x, pts[0].y)
+            for (i in 1 until pts.size) path.lineTo(pts[i].x, pts[i].y)
+            paint.color = color
+            canvas.drawPath(path, paint)
+        }
+    }
 
     private class Theme(
         val name: String,
@@ -105,7 +149,7 @@ class RioBoardService : InputMethodService() {
 
     private val siWords = ("ඔයා මම අපි ඔබ කොහොමද කොහොමෙයි ස්තූතියි හරි ඉතින් මොකද මොකක්ද මොනවද කොහෙද නැහැ ඔව් කරන්න යන්න එන්න බලන්න දෙන්න ගන්න ලස්සනයි ආයුබෝවන් සුභ රාත්‍රියක් උදෑසනක් දැන් ඊයේ අද හෙට ගෙදර යාලුවා යාලුවෝ අම්මා තාත්තා මල්ලි අක්කා අයියා නංගි ආදරේ සතුටුයි දුකයි කමක් නැහැ පුළුවන් බැහැ ඕන නෑ තියෙනවා මොකෝ ඇයි කවද්ද කීයද කවුද මෙහෙ එහෙ ඔහොම මේක ඒක ඕක").split(" ")
 
-    private val dict: List<String> by lazy { (enWords + siWords).filter { it.isNotBlank() } }
+    private val dict: List<String> by lazy { (enWords + SinhalaDict.englishExtra + siWords + SinhalaDict.sinhala).filter { it.isNotBlank() } }
 
     // ---------- emoji ----------
     private val emojiCats: List<Pair<String, List<String>>> = listOf(
@@ -152,6 +196,21 @@ class RioBoardService : InputMethodService() {
     private var previewPopup: android.widget.PopupWindow? = null
     private var previewTv: TextView? = null
     private var keyHIdx = 1
+    private var swipeOn = true        // glide across letters to type a word
+    private var autoCorrect = true    // Singlish typo fixing
+    private var nextWordOn = true     // next-word suggestions
+    private var numberRow = true      // digits row on top
+    private var popupsOn = true       // long-press popups (a -> á ä ...)
+    private var oneHand = 0           // 0 off, 1 left, 2 right
+    private var widthPct = 100
+    private var heightPct = 100
+    private var layoutKind = 0        // 0 Sinhala grid, 1 Wijesekara, 2 Tamil
+    private var undoCorr: Pair<String, String>? = null   // (corrected+separator, what was typed)
+    private var swipeCommitted: String? = null
+    private var swipeAlts: List<String> = emptyList()
+    private val bigrams = HashMap<String, HashMap<String, Int>>()
+    private val learnedRoman = HashMap<String, Int>()
+    private val swipeKeys = ArrayList<Pair<Char, View>>()
     private var panel = Panel.NONE
     private var toolbarX = 0
     private var clearArmed = false
@@ -178,7 +237,7 @@ class RioBoardService : InputMethodService() {
     private var pendingVoiceAt = 0L
 
     private val keyHs = intArrayOf(44, 50, 56)
-    private val keyH: Int get() = keyHs[keyHIdx]
+    private val keyH: Int get() = keyHs[keyHIdx] * heightPct / 100
 
     private lateinit var prefs: SharedPreferences
     private lateinit var cm: ClipboardManager
@@ -220,6 +279,15 @@ class RioBoardService : InputMethodService() {
         boomDelayIdx = prefs.getInt("boom_delay", 1).coerceIn(0, boomDelays.size - 1)
         keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
         singlishOn = prefs.getBoolean("singlish", false)
+        swipeOn = prefs.getBoolean("swipe", true)
+        autoCorrect = prefs.getBoolean("autocorrect", true)
+        nextWordOn = prefs.getBoolean("nextword", true)
+        numberRow = prefs.getBoolean("numrow", true)
+        popupsOn = prefs.getBoolean("popups", true)
+        oneHand = prefs.getInt("onehand", 0).coerceIn(0, 2)
+        widthPct = prefs.getInt("widthpct", 100).coerceIn(50, 100)
+        heightPct = prefs.getInt("heightpct", 100).coerceIn(70, 140)
+        layoutKind = prefs.getInt("langlayout", 0).coerceIn(0, 2)
         snips = Snips.load(prefs)
         loadRioStyles()
         loadBackground()
@@ -234,6 +302,21 @@ class RioBoardService : InputMethodService() {
             o.keys().forEach { learned[it] = o.getInt(it) }
         } catch (e: Exception) {
         }
+        try {
+            val o = JSONObject(prefs.getString("bigrams", "{}"))
+            o.keys().forEach { prev ->
+                val inner = o.getJSONObject(prev)
+                val m = HashMap<String, Int>()
+                inner.keys().forEach { nx -> m[nx] = inner.getInt(nx) }
+                bigrams[prev] = m
+            }
+        } catch (e: Exception) {
+        }
+        try {
+            val o = JSONObject(prefs.getString("learned_roman", "{}"))
+            o.keys().forEach { learnedRoman[it] = o.getInt(it) }
+        } catch (e: Exception) {
+        }
         cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         cm.addPrimaryClipChangedListener(clipListener)
     }
@@ -242,6 +325,7 @@ class RioBoardService : InputMethodService() {
         boomRunning = false
         handler.removeCallbacks(boomStep)
         hidePreview()
+        hideAlts()
         cm.removePrimaryClipChangedListener(clipListener)
         if (instance === this) instance = null
         super.onDestroy()
@@ -274,7 +358,18 @@ class RioBoardService : InputMethodService() {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
+        trail = TrailView(this).also {
+            it.isClickable = false
+            frame.addView(
+                it,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
         frame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateSnowTop() }
+        applySize()
         render()
         applySnow()
         return frame
@@ -293,6 +388,8 @@ class RioBoardService : InputMethodService() {
         }
         toolsPinned = false
         sbuf.clear()
+        undoCorr = null
+        swipeCommitted = null
         snips = Snips.load(prefs)
         loadRioStyles()
         val it0 = info?.inputType ?: 0
@@ -351,7 +448,8 @@ class RioBoardService : InputMethodService() {
     override fun onComputeInsets(outInsets: InputMethodService.Insets) {
         super.onComputeInsets(outInsets)
         if (::root.isInitialized && ::frame.isInitialized &&
-            root.height > 0 && frame.height - root.height > dp(40)
+            root.height > 0 &&
+            (frame.height - root.height > dp(40) || frame.width - root.width > dp(24))
         ) {
             val loc = IntArray(2)
             root.getLocationInWindow(loc)
@@ -410,6 +508,9 @@ class RioBoardService : InputMethodService() {
     // ---------- rendering ----------
     private fun render() {
         hidePreview()
+        hideAlts()
+        swipeKeys.clear()
+        applySize()
         root.removeAllViews()
         applyRootBg()
         root.addView(barHolder)
@@ -430,7 +531,7 @@ class RioBoardService : InputMethodService() {
             Panel.CALC -> renderCalc()
             Panel.KEYSTYLE -> renderKeyStyle()
             Panel.NONE -> {
-                root.addView(row(chars("1234567890")))
+                if (numberRow) root.addView(row(numberKeys()))
                 if (siMode) renderSinhala() else renderEnglish()
             }
         }
@@ -474,6 +575,10 @@ class RioBoardService : InputMethodService() {
             },
             tx("singlish", "Singlish", 0, "A→අ", 13f, { singlishOn }) { setSinglish(!singlishOn) },
             ic("voice", "Voice typing", 0, IconView.Kind.MIC) { startVoice() },
+            tx("numrow", "Number row", 0, "123", 13f, { numberRow }) { toggleNumberRow() },
+            tx("swipe", "Swipe typing", 0, "〰", 16f, { swipeOn }) { toggleSwipe() },
+            tx("layout", "Sinhala / Tamil layout", 0, "සි/த", 12f) { cycleLayout() },
+            tx("onehand", "One-handed mode", 0, "☝", 16f, { oneHand != 0 }) { setOneHand((oneHand + 1) % 3) },
             // 1 text
             tx("fonts", "Fonts", 1, "Aa", 16f, { fontStyle != 0 || rioStyle >= 0 || panel == Panel.FONTS }) { togglePanel(Panel.FONTS) },
             ic("snips", "Shortcuts", 1, IconView.Kind.BOLT, { panel == Panel.SNIPS }) { togglePanel(Panel.SNIPS) },
@@ -1478,6 +1583,54 @@ class RioBoardService : InputMethodService() {
             prefs.edit().putInt("keyh", keyHIdx).apply()
             render()
         })
+        box.addView(settingLabel("Keyboard width"))
+        val widths = intArrayOf(100, 90, 80, 70, 60)
+        box.addView(chipRow(widths.map { "$it%" }, widths.indexOf(widthPct)) {
+            widthPct = widths[it]
+            prefs.edit().putInt("widthpct", widthPct).apply()
+            render()
+        })
+        box.addView(settingLabel("Keyboard height (fine tune)"))
+        val heights = intArrayOf(80, 90, 100, 110, 125)
+        box.addView(chipRow(heights.map { "$it%" }, heights.indexOf(heightPct)) {
+            heightPct = heights[it]
+            prefs.edit().putInt("heightpct", heightPct).apply()
+            render()
+        })
+        box.addView(settingLabel("One-handed mode"))
+        box.addView(chipRow(listOf("Off", "◀ Left", "Right ▶"), oneHand) { setOneHand(it) })
+        box.addView(settingLabel("Number row"))
+        box.addView(chipRow(listOf("Show", "Hide"), if (numberRow) 0 else 1) {
+            numberRow = it == 0
+            prefs.edit().putBoolean("numrow", numberRow).apply()
+            render()
+        })
+        box.addView(settingLabel("Long-press popups (a → á ä, 1 → !)"))
+        box.addView(chipRow(listOf("On", "Off"), if (popupsOn) 0 else 1) {
+            popupsOn = it == 0
+            prefs.edit().putBoolean("popups", popupsOn).apply()
+            render()
+        })
+        box.addView(settingLabel("Swipe typing"))
+        box.addView(chipRow(listOf("On", "Off"), if (swipeOn) 0 else 1) {
+            swipeOn = it == 0
+            prefs.edit().putBoolean("swipe", swipeOn).apply()
+            render()
+        })
+        box.addView(settingLabel("Singlish auto-correct"))
+        box.addView(chipRow(listOf("On", "Off"), if (autoCorrect) 0 else 1) {
+            autoCorrect = it == 0
+            prefs.edit().putBoolean("autocorrect", autoCorrect).apply()
+        })
+        box.addView(settingLabel("Next-word suggestions"))
+        box.addView(chipRow(listOf("On", "Off"), if (nextWordOn) 0 else 1) {
+            nextWordOn = it == 0
+            prefs.edit().putBoolean("nextword", nextWordOn).apply()
+            suggestions = computeSuggestions()
+            render()
+        })
+        box.addView(settingLabel("Sinhala / Tamil layout"))
+        box.addView(chipRow(listOf("Sinhala", "Wijesekara", "Tamil"), layoutKind) { setLayout(it) })
         box.addView(settingLabel("Typing"))
         box.addView(chipRow(listOf("English", "Singlish → සිංහල"), if (singlishOn) 1 else 0) { setSinglish(it == 1) })
         box.addView(settingLabel("Background photo"))
@@ -1588,14 +1741,16 @@ class RioBoardService : InputMethodService() {
     // ----- typing layouts -----
     private fun renderEnglish() {
         if (symbols) {
+            if (!numberRow) root.addView(row(chars("1234567890")))
             root.addView(row(chars("@#$%&*-+()")))
             root.addView(row(chars("!\"':;/?_=~")))
             root.addView(row(chars("<>[]{}\\|^`") + Key("⌫", 1.3f, Style.SPECIAL, repeat = true) { deleteOne() }))
         } else {
             val upper = shift != 0
-            fun letters(s: String) = s.map { c ->
+            fun letters(s: String, topRow: Boolean = false) = s.mapIndexed { i, c ->
                 val label = if (upper) c.uppercaseChar().toString() else c.toString()
-                Key(label) {
+                val digit = if (topRow && !numberRow) "1234567890"[i] else null
+                Key(label, alts = altsFor(c, digit, upper), letter = c) {
                     typeLetter(label)
                     if (shift == 1) {
                         shift = 0
@@ -1603,7 +1758,7 @@ class RioBoardService : InputMethodService() {
                     }
                 }
             }
-            root.addView(row(letters("qwertyuiop")))
+            root.addView(row(letters("qwertyuiop", true)))
             root.addView(row(letters("asdfghjkl"), pad = 0.5f))
             val shiftKey = Key(
                 if (shift == 2) "⇪" else "⇧", 1.5f,
@@ -1619,7 +1774,7 @@ class RioBoardService : InputMethodService() {
                         Key("ABC", 1.5f, Style.SPECIAL, 14f) { flushSinglish(); symbols = false; render() }
                     else
                         Key("?123", 1.5f, Style.SPECIAL, 14f) { flushSinglish(); symbols = true; render() },
-                    Key("සිං", 1.3f, Style.SPECIAL, 14f, onLong = { setSinglish(!singlishOn) }) {
+                    Key(if (layoutKind == 2) "த" else "සිං", 1.3f, Style.SPECIAL, 14f, onLong = { setSinglish(!singlishOn) }) {
                         flushSinglish(); siMode = true; symbols = false; render()
                     },
                     Key(",") { type(",") },
@@ -1632,15 +1787,25 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun renderSinhala() {
+        when (layoutKind) {
+            1 -> renderWijesekara()
+            2 -> renderTamil()
+            else -> renderSinhalaGrid()
+        }
+    }
+
+    private fun digitAlt(row: Int, col: Int): List<String> =
+        if (row == 0 && !numberRow) listOf("1234567890"[col].toString()) else emptyList()
+
+    private fun renderSinhalaGrid() {
         val layer = when (siLayer) {
             0 -> si1
             1 -> si2
             else -> si3
         }
-        layer.forEach { keys ->
-            root.addView(row(keys.map { s ->
-                val label = if (siLayer == 2) "\u25CC$s" else s
-                Key(label, textSp = 22f) { decorateWordStart(s); type(s) }
+        layer.forEachIndexed { r, keys ->
+            root.addView(row(keys.mapIndexed { c, s ->
+                Key(sinLabel(s), textSp = 22f, alts = digitAlt(r, c)) { decorateWordStart(s); type(s) }
             }))
         }
         repeat(3 - layer.size) {
@@ -1653,20 +1818,160 @@ class RioBoardService : InputMethodService() {
             1 -> "අ"
             else -> "\u25CC\u0DCF"
         }
+        root.addView(indicBottomRow(Key(nextLabel, 1.3f, Style.ACTIVE, 20f) { siLayer = (siLayer + 1) % 3; render() }))
+    }
+
+    // ----- Tamil (3 layers: consonants / vowels / vowel signs) -----
+    private val ta1 = listOf(
+        listOf("க", "ங", "ச", "ஞ", "ட", "ண", "த", "ந", "ப", "ம"),
+        listOf("ய", "ர", "ல", "வ", "ழ", "ள", "ற", "ன", "ஜ", "ஷ"),
+        listOf("ஸ", "ஹ", "க்ஷ", "ஶ")
+    )
+    private val ta2 = listOf(
+        listOf("அ", "ஆ", "இ", "ஈ", "உ", "ஊ", "எ", "ஏ", "ஐ", "ஒ"),
+        listOf("ஓ", "ஔ", "ஃ")
+    )
+    private val ta3 = listOf(
+        listOf("\u0BBE", "\u0BBF", "\u0BC0", "\u0BC1", "\u0BC2", "\u0BC6", "\u0BC7", "\u0BC8", "\u0BCA", "\u0BCB"),
+        listOf("\u0BCC", "\u0BCD")
+    )
+
+    private fun renderTamil() {
+        val layer = when (siLayer) {
+            0 -> ta1
+            1 -> ta2
+            else -> ta3
+        }
+        layer.forEachIndexed { r, keys ->
+            root.addView(row(keys.mapIndexed { c, s ->
+                Key(sinLabel(s), textSp = 22f, alts = digitAlt(r, c)) { decorateWordStart(s); type(s) }
+            }, pad = (10 - keys.size) / 2f))
+        }
+        repeat(3 - layer.size) {
+            root.addView(View(this).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
+            })
+        }
+        val nextLabel = when ((siLayer + 1) % 3) {
+            0 -> "க"
+            1 -> "அ"
+            else -> "\u25CC\u0BBE"
+        }
+        root.addView(indicBottomRow(Key(nextLabel, 1.3f, Style.ACTIVE, 20f) { siLayer = (siLayer + 1) % 3; render() }))
+    }
+
+    // ----- Wijesekara (standard Sinhala typewriter layout, SLS 1134), key positions follow QWERTY -----
+    private val wijN = listOf(
+        listOf("\u0DD4", "අ", "\u0DD0", "ර", "එ", "හ", "ම", "ස", "ද", "ච"),
+        listOf("\u0DCA", "\u0DD2", "\u0DCF", "\u0DD9", "ට", "ය", "ව", "න", "ක", "ත"),
+        listOf("\u0D82", "ජ", "ඩ", "ඉ", "බ", "ප", "ල", "ග")
+    )
+    private val wijS = listOf(
+        listOf("\u0DD6", "උ", "\u0DD1", "ඍ", "ඔ", "ශ", "ඹ", "ෂ", "ධ", "ඡ"),
+        listOf("\u0DDF", "\u0DD3", "\u0DD8", "ෆ", "ඨ", "\u0DCA\u200D\u0DBA", "\u0DDB", "ණ", "ඛ", "ථ"),
+        listOf("ඞ", "ඣ", "ඪ", "ඊ", "භ", "ඵ", "ළ", "ඝ")
+    )
+    /** AltGr letters of the standard layout, reached with a long-press on the key. */
+    private val wijAlts: Map<String, List<String>> = mapOf(
+        "ද" to listOf("ඳ"), "\u0DCA" to listOf("\u0DF3"), "\u0D82" to listOf("\u0D83"),
+        "ජ" to listOf("ඦ"), "ඩ" to listOf("ඬ"), "ල" to listOf("ඏ"), "ග" to listOf("ඟ"),
+        "ච" to listOf("ඤ", "ඥ")
+    )
+    private val RAKAR = "\u0DCA\u200D\u0DBB"
+    private val REPAYA = "\u0DBB\u0DCA\u200D"
+
+    private fun renderWijesekara() {
+        val layer = if (shift != 0) wijS else wijN
+        layer.forEachIndexed { r, keys ->
+            val ks = keys.mapIndexed { c, s ->
+                val extra = digitAlt(r, c) + (if (popupsOn) wijAlts[wijN[r][c]].orEmpty() else emptyList())
+                Key(sinLabel(s), textSp = 22f, alts = extra) {
+                    decorateWordStart(s)
+                    wijType(s)
+                    if (shift == 1) {
+                        shift = 0
+                        render()
+                    }
+                }
+            }
+            if (r == 2) {
+                val shiftKey = Key(
+                    if (shift == 2) "⇪" else "⇧", 1.3f,
+                    if (shift == 0) Style.SPECIAL else Style.ACTIVE
+                ) { toggleShift() }
+                val bs = Key("⌫", 1.3f, Style.SPECIAL, repeat = true) { deleteOne() }
+                root.addView(row(listOf(shiftKey) + ks + bs))
+            } else {
+                root.addView(row(ks))
+            }
+        }
         root.addView(
             row(
                 listOf(
-                    Key("ABC", 1.3f, Style.SPECIAL, 14f) { siMode = false; render() },
-                    Key(nextLabel, 1.3f, Style.ACTIVE, 20f) { siLayer = (siLayer + 1) % 3; render() },
+                    Key("ABC", 1.3f, Style.SPECIAL, 14f, onLong = { cycleLayout() }) { siMode = false; render() },
+                    Key(sinLabel(RAKAR), 1.2f, Style.ACTIVE, 20f) { wijType(RAKAR) },
                     Key(",") { type(",") },
-                    spaceKey(4f),
+                    spaceKey(3.5f),
                     Key(".") { type(".") },
-                    Key("⌫", 1.3f, Style.SPECIAL, repeat = true) { deleteOne() },
+                    Key(REPAYA, 1.2f, Style.ACTIVE, 20f) { type(REPAYA) },
                     Key("⏎", 1.5f, Style.ACCENT) { pressEnter() }
                 )
             )
         )
     }
+
+    /**
+     * Typewriter habit: the vowel sign ෙ / ෛ is typed BEFORE its consonant, and ො ෝ ෞ are built
+     * from parts. This reorders and joins them so the text comes out as proper Unicode.
+     */
+    private fun wijType(s: String) {
+        val ic = currentInputConnection
+        if (ic == null || s.length != 1) {
+            type(s)
+            return
+        }
+        val c0 = s[0]
+        val b = ic.getTextBeforeCursor(3, 0)?.toString() ?: ""
+        val last = b.lastOrNull()
+        val prev = if (b.length >= 2) b[b.length - 2] else null
+        fun isCons(c: Char?) = c != null && c in '\u0D9A'..'\u0DC6'
+        fun swap(n: Int, t: String) {
+            ic.beginBatchEdit()
+            ic.deleteSurroundingText(n, 0)
+            ic.commitText(t, 1)
+            ic.endBatchEdit()
+            suggestions = computeSuggestions()
+            refreshBar()
+        }
+        when {
+            isCons(c0) && (last == '\u0DD9' || last == '\u0DDB') && !isCons(prev) -> swap(1, "$c0$last")
+            c0 == '\u0DCF' && last == '\u0DD9' -> swap(1, "\u0DDC")   // ෙ + ා = ො
+            c0 == '\u0DCA' && last == '\u0DDC' -> swap(1, "\u0DDD")   // ො + ් = ෝ
+            c0 == '\u0DD9' && last == '\u0DD9' -> swap(1, "\u0DDB")   // ෙ + ෙ = ෛ
+            c0 == '\u0DDF' && last == '\u0DD9' -> swap(1, "\u0DDE")   // ෙ + ෟ = ෞ
+            else -> type(s)
+        }
+    }
+
+    /** Sinhala/Tamil signs get a dotted circle so they are visible on their own key. */
+    private fun sinLabel(s: String): String {
+        val c = s[0]
+        val sign = c == '\u0DCA' || c in '\u0DCF'..'\u0DDF' || c in '\u0DF2'..'\u0DF3' ||
+            c == '\u0D82' || c == '\u0D83' || c in '\u0BBE'..'\u0BCD' || c == '\u0BD7'
+        return if (sign) "\u25CC$s" else s
+    }
+
+    private fun indicBottomRow(layerKey: Key): LinearLayout = row(
+        listOf(
+            Key("ABC", 1.3f, Style.SPECIAL, 14f, onLong = { cycleLayout() }) { siMode = false; render() },
+            layerKey,
+            Key(",") { type(",") },
+            spaceKey(4f),
+            Key(".") { type(".") },
+            Key("⌫", 1.3f, Style.SPECIAL, repeat = true) { deleteOne() },
+            Key("⏎", 1.5f, Style.ACCENT) { pressEnter() }
+        )
+    )
 
     private fun spaceKey(weight: Float) = Key(
         spaceLabel(), weight, Style.NORMAL, 12f, space = true,
@@ -1804,16 +2109,28 @@ class RioBoardService : InputMethodService() {
                 true
             }
         } else {
-            // Keys fire the moment the finger touches (no waiting for release), so fast typing
-            // feels instant. A key that also has a long-press action fires on release instead.
+            // Plain keys fire the moment the finger touches (instant typing). A key that also has a
+            // long-press action, popup letters or swipe typing fires on release instead.
             val long = k.onLong
+            val hasAlts = k.alts.isNotEmpty()
+            val swipeKey = swipeOn && k.letter != null && !passwordField && fontStyle == 0
+            if (k.letter != null) swipeKeys.add(k.letter to tv)
+            val deferred = long != null || hasAlts || swipeKey
             val previewable = !k.space && k.style == Style.NORMAL && k.label.isNotEmpty() &&
                 k.label.codePointCount(0, k.label.length) <= 2
             var longDone = false
+            var altShown = false
+            var swiping = false
+            var downX = 0f
+            var downY = 0f
             val longRun = Runnable {
-                longDone = true
-                hidePreview()
-                long?.invoke()
+                if (hasAlts) {
+                    altShown = showAlts(tv, k.alts)
+                } else {
+                    longDone = true
+                    hidePreview()
+                    long?.invoke()
+                }
             }
             tv.setOnTouchListener { view, ev ->
                 when (ev.actionMasked) {
@@ -1822,11 +2139,39 @@ class RioBoardService : InputMethodService() {
                         pressAnim(view, true)
                         keyTick(view)
                         longDone = false
-                        if (long != null) {
-                            handler.postDelayed(longRun, 380)
-                        } else {
-                            if (previewable) showPreview(view, k.label)
+                        altShown = false
+                        swiping = false
+                        downX = ev.rawX
+                        downY = ev.rawY
+                        if (previewable) showPreview(view, k.label)
+                        if (!deferred) {
                             k.onPress()
+                        } else if (long != null || hasAlts) {
+                            handler.postDelayed(longRun, 380)
+                        }
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (altShown) {
+                            updateAlt(ev.rawX)
+                        } else if (swipeKey) {
+                            if (!swiping) {
+                                val dx = ev.rawX - downX
+                                val dy = ev.rawY - downY
+                                if (dx * dx + dy * dy > dp(18) * dp(18)) {
+                                    swiping = true
+                                    handler.removeCallbacks(longRun)
+                                    hidePreview()
+                                    beginSwipe(downX, downY)
+                                }
+                            }
+                            if (swiping) {
+                                val ox = ev.rawX - ev.x
+                                val oy = ev.rawY - ev.y
+                                for (i in 0 until ev.historySize) {
+                                    addSwipePoint(ev.getHistoricalX(i) + ox, ev.getHistoricalY(i) + oy)
+                                }
+                                addSwipePoint(ev.rawX, ev.rawY)
+                            }
                         }
                     }
                     MotionEvent.ACTION_UP -> {
@@ -1834,13 +2179,28 @@ class RioBoardService : InputMethodService() {
                         pressAnim(view, false)
                         handler.removeCallbacks(longRun)
                         hidePreview()
-                        if (long != null && !longDone) k.onPress()
+                        when {
+                            altShown -> {
+                                altShown = false
+                                val a = takeAlt()
+                                if (a != null) commitAlt(a)
+                            }
+                            swiping -> {
+                                swiping = false
+                                endSwipe(true)
+                            }
+                            deferred && !longDone -> k.onPress()
+                        }
                     }
                     MotionEvent.ACTION_CANCEL -> {
                         view.isPressed = false
                         pressAnim(view, false)
                         handler.removeCallbacks(longRun)
                         hidePreview()
+                        hideAlts()
+                        if (swiping) endSwipe(false)
+                        swiping = false
+                        altShown = false
                     }
                 }
                 true
@@ -1849,9 +2209,322 @@ class RioBoardService : InputMethodService() {
         return tv
     }
 
+    // =====================================================================
+    //  Number row, long-press popups, swipe typing, one-handed mode, layouts
+    // =====================================================================
+    private val digitAlts: Map<Char, List<String>> = mapOf(
+        '1' to listOf("!", "¹"), '2' to listOf("@", "²"), '3' to listOf("#", "³"),
+        '4' to listOf("\$", "€"), '5' to listOf("%", "‰"), '6' to listOf("^", "⁶"),
+        '7' to listOf("&", "⁷"), '8' to listOf("*", "⁸"), '9' to listOf("(", "⁹"),
+        '0' to listOf(")", "°", "⁰")
+    )
+
+    private val accents: Map<Char, String> = mapOf(
+        'a' to "á ä à â ã å ā æ", 'c' to "ç ć č", 'd' to "ď", 'e' to "é è ê ë ē ė",
+        'g' to "ğ", 'i' to "í ï ì î ī", 'l' to "ł", 'n' to "ñ ń", 'o' to "ó ö ò ô õ ø ō œ",
+        'r' to "ř", 's' to "ß ś š", 't' to "ť", 'u' to "ú ü ù û ū", 'y' to "ý ÿ", 'z' to "ž ź ż"
+    )
+
+    /** With Singlish on, the popups give the capital-letter sounds (T=ඨ, N=ණ, L=ළ ...). */
+    private val singlishAlts: Map<Char, List<String>> = mapOf(
+        't' to listOf("T", "Th"), 'd' to listOf("D", "Dh"), 'n' to listOf("N", "nG"),
+        'l' to listOf("L"), 's' to listOf("S", "sh"), 'm' to listOf("M"), 'h' to listOf("H"),
+        'r' to listOf("R"), 'y' to listOf("Y"), 'c' to listOf("Ch"), 'g' to listOf("gh", "ng"),
+        'k' to listOf("kh"), 'p' to listOf("ph"), 'b' to listOf("bh"), 'j' to listOf("jh")
+    )
+
+    private fun numberKeys(): List<Key> = "1234567890".map { c ->
+        Key(c.toString(), alts = if (popupsOn) digitAlts[c].orEmpty() else emptyList()) {
+            type(styled(c.toString()))
+        }
+    }
+
+    private fun altsFor(c: Char, digit: Char?, upper: Boolean): List<String> {
+        val out = ArrayList<String>()
+        if (digit != null) out.add(digit.toString())
+        if (popupsOn) {
+            if (singlishOn) {
+                singlishAlts[c]?.let { out.addAll(it) }
+            } else {
+                accents[c]?.split(" ")?.forEach { out.add(if (upper) it.uppercase() else it) }
+            }
+        }
+        return out
+    }
+
+    private fun commitAlt(alt: String) {
+        val sing = singlishOn && !passwordField && alt.all { it in 'a'..'z' || it in 'A'..'Z' }
+        if (sing) {
+            alt.forEach { typeLetter(it.toString()) }
+        } else {
+            flushSinglish()
+            type(styled(alt))
+        }
+        if (shift == 1) {
+            shift = 0
+            render()
+        }
+    }
+
+    // ----- long-press popup -----
+    private var altPopup: android.widget.PopupWindow? = null
+    private var altCells: List<TextView> = emptyList()
+    private var altValues: List<String> = emptyList()
+    private var altLeft = 0
+    private var altCellW = 1
+    private var altSel = 0
+
+    private fun showAlts(anchor: View, alts: List<String>): Boolean {
+        if (!::frame.isInitialized || alts.isEmpty()) return false
+        return try {
+            hidePreview()
+            hideAlts()
+            val sw = resources.displayMetrics.widthPixels
+            val cw = maxOf(anchor.width, dp(40))
+            val ch = maxOf((anchor.height * 1.2f).toInt(), dp(52))
+            val total = cw * alts.size
+            val loc = IntArray(2)
+            anchor.getLocationOnScreen(loc)
+            val extendLeft = loc[0] + anchor.width / 2 > sw / 2
+            val ordered = if (extendLeft) alts.reversed() else alts
+            var x = if (extendLeft) loc[0] + anchor.width - total else loc[0]
+            x = x.coerceIn(0, maxOf(0, sw - total))
+            val y = loc[1] - ch - dp(6)
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(12).toFloat()
+                    setColor(if (th.bg == th.key) th.special else (th.key or (0xFF shl 24)))
+                    setStroke(dp(1), th.accent)
+                }
+            }
+            val cells = ordered.map { a ->
+                TextView(this).apply {
+                    text = a
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+                    layoutParams = LinearLayout.LayoutParams(cw, ch)
+                }
+            }
+            cells.forEach { box.addView(it) }
+            val p = android.widget.PopupWindow(box, total, ch).apply {
+                isTouchable = false
+                isFocusable = false
+                isClippingEnabled = false
+                inputMethodMode = android.widget.PopupWindow.INPUT_METHOD_NOT_NEEDED
+                elevation = dp(8).toFloat()
+            }
+            p.showAtLocation(frame, Gravity.NO_GRAVITY, x, y)
+            altPopup = p
+            altCells = cells
+            altValues = ordered
+            altLeft = x
+            altCellW = cw
+            altSel = if (extendLeft) ordered.size - 1 else 0
+            highlightAlt()
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun highlightAlt() {
+        altCells.forEachIndexed { i, tv ->
+            val on = i == altSel
+            tv.setTextColor(if (on) Color.WHITE else th.text)
+            tv.background = if (on) GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(th.accent)
+            } else null
+        }
+    }
+
+    private fun updateAlt(rawX: Float) {
+        if (altCells.isEmpty()) return
+        val i = ((rawX - altLeft) / altCellW).toInt().coerceIn(0, altCells.size - 1)
+        if (i != altSel) {
+            altSel = i
+            highlightAlt()
+        }
+    }
+
+    private fun takeAlt(): String? {
+        val a = altValues.getOrNull(altSel)
+        hideAlts()
+        return a
+    }
+
+    private fun hideAlts() {
+        try {
+            altPopup?.dismiss()
+        } catch (e: Exception) {
+        }
+        altPopup = null
+        altCells = emptyList()
+        altValues = emptyList()
+    }
+
+    // ----- swipe typing -----
+    private var swipeActive = false
+    private val swipePts = ArrayList<Float>()
+    private var swipeRects: List<Pair<Char, FloatArray>> = emptyList()
+    private var trail: TrailView? = null
+
+    private fun beginSwipe(x: Float, y: Float) {
+        swipePts.clear()
+        swipeRects = swipeKeys.map { (c, v) ->
+            val l = IntArray(2)
+            v.getLocationOnScreen(l)
+            c to floatArrayOf(l[0].toFloat(), l[1].toFloat(), (l[0] + v.width).toFloat(), (l[1] + v.height).toFloat())
+        }
+        swipeActive = true
+        trail?.color = th.accent
+        trail?.clear()
+        addSwipePoint(x, y)
+    }
+
+    private fun addSwipePoint(x: Float, y: Float) {
+        if (!swipeActive) return
+        swipePts.add(x)
+        swipePts.add(y)
+        trail?.add(x, y)
+    }
+
+    private fun endSwipe(commit: Boolean) {
+        val rects = swipeRects
+        swipeActive = false
+        trail?.clear()
+        if (!commit || rects.isEmpty()) return
+        val sb = StringBuilder()
+        var i = 0
+        while (i + 1 < swipePts.size) {
+            val x = swipePts[i]
+            val y = swipePts[i + 1]
+            i += 2
+            var best = ' '
+            var bestD = Float.MAX_VALUE
+            for ((c, r) in rects) {
+                val dx = if (x < r[0]) r[0] - x else if (x > r[2]) x - r[2] else 0f
+                val dy = if (y < r[1]) r[1] - y else if (y > r[3]) y - r[3] else 0f
+                val d = dx * dx + dy * dy
+                if (d < bestD) {
+                    bestD = d
+                    best = c
+                }
+            }
+            if (best != ' ' && (sb.isEmpty() || sb[sb.length - 1] != best)) sb.append(best)
+        }
+        val words = swipeCandidates(sb.toString())
+        if (words.isNotEmpty()) commitSwipe(words)
+    }
+
+    private fun swipeCandidates(path: String): List<String> {
+        if (path.length < 2) return emptyList()
+        val words = ArrayList<String>()
+        return if (singlishOn) {
+            learnedRoman.entries.sortedByDescending { it.value }.forEach { words.add(it.key) }
+            words.addAll(SinhalaDict.roman)
+            SwipeDecoder.rank(path, words, { learnedRoman[it] ?: 0 })
+        } else {
+            learned.entries.filter { e -> e.key.all { it in 'a'..'z' } }
+                .sortedByDescending { it.value }.forEach { words.add(it.key) }
+            words.addAll(enWords)
+            words.addAll(SinhalaDict.englishExtra)
+            SwipeDecoder.rank(path, words, { learned[it.lowercase()] ?: 0 })
+        }
+    }
+
+    /** Types the best guess + a space; the other guesses go to the suggestion bar to swap in. */
+    private fun commitSwipe(words: List<String>) {
+        val ic = currentInputConnection ?: return
+        flushSinglish()
+        val cap = shift != 0
+        val shown = words.map { w ->
+            val t = if (singlishOn) Singlish.convert(w) else w
+            if (cap && !singlishOn) t.replaceFirstChar { it.uppercase() } else t
+        }
+        val best = shown[0]
+        decorateWordStart(best)
+        val before = ic.getTextBeforeCursor(1, 0)?.toString() ?: ""
+        val lead = if (before.isNotEmpty() && isWordChar(before[0])) " " else ""
+        val prev = prevWordBefore(0)
+        ic.commitText("$lead$best ", 1)
+        learn(best)
+        if (prev != null && lead.isEmpty()) learnBigram(prev, best)
+        if (singlishOn) learnRoman(words[0])
+        undoCorr = null
+        swipeCommitted = best
+        swipeAlts = shown.drop(1)
+        suggestions = swipeAlts
+        toolsPinned = false
+        if (shift == 1) {
+            shift = 0
+            render()
+        } else {
+            refreshBar()
+        }
+        if (::snow.isInitialized) snow.burst()
+    }
+
+    // ----- one-handed mode / keyboard size -----
+    private fun applySize() {
+        if (!::root.isInitialized) return
+        val lp = root.layoutParams as? FrameLayout.LayoutParams ?: return
+        val sw = resources.displayMetrics.widthPixels
+        val pct = if (oneHand != 0) minOf(widthPct, 80) else widthPct
+        val w = if (pct >= 100) ViewGroup.LayoutParams.MATCH_PARENT else sw * pct / 100
+        val g = Gravity.BOTTOM or when (oneHand) {
+            1 -> Gravity.START
+            2 -> Gravity.END
+            else -> Gravity.CENTER_HORIZONTAL
+        }
+        if (lp.width != w || lp.gravity != g) {
+            lp.width = w
+            lp.gravity = g
+            root.layoutParams = lp
+        }
+    }
+
+    private fun setOneHand(mode: Int) {
+        oneHand = mode.coerceIn(0, 2)
+        prefs.edit().putInt("onehand", oneHand).apply()
+        panel = Panel.NONE
+        render()
+    }
+
+    private fun toggleNumberRow() {
+        numberRow = !numberRow
+        prefs.edit().putBoolean("numrow", numberRow).apply()
+        render()
+    }
+
+    private fun toggleSwipe() {
+        swipeOn = !swipeOn
+        prefs.edit().putBoolean("swipe", swipeOn).apply()
+        toast(if (swipeOn) "Swipe typing on" else "Swipe typing off")
+        render()
+    }
+
+    private val layoutNames = listOf("Sinhala", "Wijesekara", "Tamil")
+
+    private fun setLayout(kind: Int) {
+        flushSinglish()
+        layoutKind = kind.coerceIn(0, 2)
+        siLayer = 0
+        shift = 0
+        prefs.edit().putInt("langlayout", layoutKind).apply()
+        render()
+    }
+
+    private fun cycleLayout() {
+        setLayout((layoutKind + 1) % 3)
+        toast(layoutNames[layoutKind])
+    }
+
     // ---------- word suggestions ----------
     private fun isWordChar(c: Char): Boolean =
-        c.isLetter() || c == '\'' || c == '\u200D' || c in '\u0D80'..'\u0DFF'
+        c.isLetter() || c == '\'' || c == '\u200D' || c in '\u0D80'..'\u0DFF' || c in '\u0B80'..'\u0BFF'
 
     private fun currentPrefix(): String {
         val before = currentInputConnection?.getTextBeforeCursor(24, 0)?.toString() ?: return ""
@@ -1862,8 +2535,14 @@ class RioBoardService : InputMethodService() {
 
     private fun computeSuggestions(): List<String> {
         if (fontStyle != 0 || passwordField) return emptyList()
+        val sc = swipeCommitted
+        if (sc != null) {
+            val b = currentInputConnection?.getTextBeforeCursor(sc.length + 2, 0)?.toString() ?: ""
+            if (swipeAlts.isNotEmpty() && b.endsWith("$sc ")) return swipeAlts
+            swipeCommitted = null
+        }
         val prefix = currentPrefix()
-        if (prefix.isEmpty()) return emptyList()
+        if (prefix.isEmpty()) return nextWords()
         val lower = prefix.lowercase()
         val out = LinkedHashSet<String>()
         learned.entries
@@ -1878,6 +2557,55 @@ class RioBoardService : InputMethodService() {
         return out.take(3).map { w -> if (cap) w.replaceFirstChar { it.uppercase() } else w }
     }
 
+    /** Word before the cursor's current word (lower-case), or null. */
+    private fun prevWordBefore(prefixLen: Int): String? {
+        val b = currentInputConnection?.getTextBeforeCursor(80, 0)?.toString() ?: return null
+        val head = b.dropLast(prefixLen).trimEnd()
+        if (head.isEmpty()) return null
+        var i = head.length
+        while (i > 0 && isWordChar(head[i - 1])) i--
+        val w = head.substring(i)
+        return if (w.isEmpty()) null else w.lowercase()
+    }
+
+    /** After "word " suggest what usually follows: your own history first, then built-in pairs. */
+    private fun nextWords(): List<String> {
+        if (!nextWordOn) return emptyList()
+        val b = currentInputConnection?.getTextBeforeCursor(60, 0)?.toString() ?: return emptyList()
+        if (b.isEmpty() || !b.last().isWhitespace() || b.last() == '\n') return emptyList()
+        val head = b.trimEnd()
+        var i = head.length
+        while (i > 0 && isWordChar(head[i - 1])) i--
+        val prev = head.substring(i).lowercase()
+        if (prev.isEmpty()) return emptyList()
+        val out = LinkedHashSet<String>()
+        bigrams[prev]?.entries?.sortedByDescending { it.value }?.forEach { out.add(it.key) }
+        SinhalaDict.next(prev).forEach { out.add(it) }
+        return out.take(3)
+    }
+
+    private fun learnBigram(prev: String, next: String) {
+        if (passwordField) return
+        val n = next.lowercase().trim()
+        if (prev.length < 1 || n.length < 2) return
+        val m = bigrams.getOrPut(prev) { HashMap() }
+        m[n] = (m[n] ?: 0) + 1
+        if (m.size > 8) m.entries.sortedBy { it.value }.take(m.size - 8).map { it.key }.forEach { m.remove(it) }
+        if (bigrams.size > 400) bigrams.keys.toList().take(60).forEach { bigrams.remove(it) }
+        val o = JSONObject()
+        for ((p, inner) in bigrams) o.put(p, JSONObject(inner.toMap()))
+        prefs.edit().putString("bigrams", o.toString()).apply()
+    }
+
+    private fun learnRoman(raw: String) {
+        if (passwordField || raw.length < 3) return
+        learnedRoman[raw] = (learnedRoman[raw] ?: 0) + 1
+        if (learnedRoman.size > 300) {
+            learnedRoman.entries.sortedBy { it.value }.take(60).map { it.key }.forEach { learnedRoman.remove(it) }
+        }
+        prefs.edit().putString("learned_roman", JSONObject(learnedRoman.toMap()).toString()).apply()
+    }
+
     private fun updateSuggestions() {
         if (!::barHolder.isInitialized) return
         val list = computeSuggestions()
@@ -1889,13 +2617,33 @@ class RioBoardService : InputMethodService() {
 
     private fun pickSuggestion(word: String) {
         val ic = currentInputConnection ?: return
+        // an alternative for a word that was just swipe-typed replaces that word
+        val sc = swipeCommitted
+        if (sc != null) {
+            val b = ic.getTextBeforeCursor(sc.length + 1, 0)?.toString()
+            if (b == "$sc ") {
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(sc.length + 1, 0)
+                ic.commitText("$word ", 1)
+                ic.endBatchEdit()
+                learn(word)
+                swipeCommitted = null
+                swipeAlts = emptyList()
+                suggestions = emptyList()
+                refreshBar()
+                return
+            }
+            swipeCommitted = null
+        }
         flushSinglish()
         val prefix = currentPrefix()
+        val prev = prevWordBefore(prefix.length)
         ic.beginBatchEdit()
         ic.deleteSurroundingText(prefix.length, 0)
         ic.commitText("$word ", 1)
         ic.endBatchEdit()
         learn(word)
+        if (prev != null) learnBigram(prev, word)
         suggestions = emptyList()
         refreshBar()
         if (::snow.isInitialized) snow.burst()
@@ -2024,20 +2772,47 @@ class RioBoardService : InputMethodService() {
     private fun type(s: String) {
         val ic = currentInputConnection
         toolsPinned = false
+        undoCorr = null
+        swipeCommitted = null
+        val isSep = s.length == 1 && !isWordChar(s[0])
         if (sbuf.isNotEmpty()) {
+            val raw = sbuf.toString()
             // Singlish word in progress: a shortcut can still match its raw letters
-            if (s == " " && expandSnip(sbuf.toString(), true)) {
+            if (s == " " && expandSnip(raw, true)) {
                 sbuf.clear()
                 return
             }
+            // typo fix: "kohomada " -> කොහොමද (backspace right after undoes it)
+            if (isSep && autoCorrect && !passwordField && ic != null) {
+                val fixed = SinhalaDict.correct(raw)
+                if (fixed != null) {
+                    val typed = Singlish.convert(raw)
+                    val prev = prevWordBefore(typed.length)
+                    ic.beginBatchEdit()
+                    ic.commitText(fixed, 1)
+                    ic.commitText(s, 1)
+                    ic.endBatchEdit()
+                    sbuf.clear()
+                    learn(fixed)
+                    if (prev != null) learnBigram(prev, fixed)
+                    undoCorr = Pair(fixed + s, typed)
+                    if (::snow.isInitialized) snow.burst()
+                    return
+                }
+            }
+            if (isSep) learnRoman(raw)
             flushSinglish()
         } else if (s == " " && fontStyle == 0 && expandSnip(currentPrefix(), false)) {
             return
         }
-        // a space/punctuation ends a word -> remember it for suggestions
-        if (s.length == 1 && !isWordChar(s[0])) {
+        // a space/punctuation ends a word -> remember it (and what followed what) for suggestions
+        if (isSep) {
             val w = currentPrefix()
             if (w.length >= 3) learn(w)
+            if (w.length >= 2) {
+                val prev = prevWordBefore(w.length)
+                if (prev != null) learnBigram(prev, w)
+            }
         }
         ic?.commitText(s, 1)
         if (::snow.isInitialized) snow.burst()
@@ -2045,6 +2820,18 @@ class RioBoardService : InputMethodService() {
 
     private fun deleteOne() {
         val ic = currentInputConnection ?: return
+        // backspace straight after an auto-correct brings back what was typed
+        undoCorr?.let { (done, orig) ->
+            undoCorr = null
+            val b = ic.getTextBeforeCursor(done.length, 0)?.toString()
+            if (b == done) {
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(done.length, 0)
+                ic.commitText(orig, 1)
+                ic.endBatchEdit()
+                return
+            }
+        }
         if (sbuf.isNotEmpty()) {
             sbuf.deleteCharAt(sbuf.length - 1)
             lastComposeMs = SystemClock.uptimeMillis()
@@ -2128,6 +2915,8 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun typeLetter(label: String) {
+        undoCorr = null
+        swipeCommitted = null
         if (sbuf.isEmpty() && !passwordField) decorateWordStart(label)
         if (singlishOn && !passwordField) {
             toolsPinned = false
