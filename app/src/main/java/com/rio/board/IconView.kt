@@ -12,7 +12,7 @@ import android.view.View
 /** Simple line icons drawn in code (no image files needed). */
 class IconView(context: Context, private val kind: Kind) : View(context) {
 
-    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN, STICKER }
+    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN, STICKER, CLOSE }
 
     var tint: Int = Color.WHITE
         set(value) {
@@ -205,6 +205,10 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
                 path.lineTo(12f, 15.2f)
                 path.lineTo(15.5f, 11.5f)
                 c.drawPath(path, p)
+            }
+            Kind.CLOSE -> {
+                c.drawLine(6f, 6f, 18f, 18f, p)
+                c.drawLine(18f, 6f, 6f, 18f, p)
             }
             Kind.STICKER -> {
                 // square sticker with a peeled bottom-right corner and a smiley

@@ -44,7 +44,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS }
 
     private class Key(
         val label: String,
@@ -60,7 +60,8 @@ class RioBoardService : InputMethodService() {
     private class Theme(
         val name: String,
         bgS: String, keyS: String, specialS: String, accentS: String,
-        activeS: String, pressedS: String, textS: String, hintS: String, snowS: String
+        activeS: String, pressedS: String, textS: String, hintS: String, snowS: String,
+        val live: LiveKind? = null
     ) {
         val bg = Color.parseColor(bgS)
         val key = Color.parseColor(keyS)
@@ -81,7 +82,15 @@ class RioBoardService : InputMethodService() {
         Theme("Ocean", "#06202B", "#0E3A4D", "#16526B", "#00C2A8", "#3B82F6", "#2A7A99", "#FFFFFF", "#8CD3E6", "#E6FBFF"),
         Theme("Sunset", "#2B1408", "#4D2A12", "#6A3A1A", "#FF7A18", "#E8478B", "#8F5A30", "#FFFFFF", "#F2B88A", "#FFF1E0"),
         Theme("Purple", "#1B1030", "#2F1D54", "#432A78", "#A855F7", "#EC4899", "#6A4DA8", "#FFFFFF", "#C4A8F0", "#F3E8FF"),
-        Theme("Light", "#E8EAF0", "#FFFFFF", "#C9CEDB", "#3B82F6", "#7C6CE0", "#B8BFD3", "#111111", "#5B6382", "#8FB8FF")
+        Theme("Light", "#E8EAF0", "#FFFFFF", "#C9CEDB", "#3B82F6", "#7C6CE0", "#B8BFD3", "#111111", "#5B6382", "#8FB8FF"),
+        // ---- live (animated) themes ----
+        Theme("Aurora", "#07111F", "#99101C33", "#B01A2A48", "#4DFFB5", "#8E6BFF", "#CC2E4A78", "#FFFFFF", "#A8C7E8", "#CFFFEF", LiveKind.AURORA),
+        Theme("Galaxy", "#0B0720", "#99181033", "#B0261A4D", "#B388FF", "#FF6EC7", "#CC4A3A8F", "#FFFFFF", "#C3B5F0", "#FFFFFF", LiveKind.GALAXY),
+        Theme("Lava", "#1A0606", "#99360E0A", "#B0501810", "#FF7A18", "#FF3D71", "#CC8A3A20", "#FFFFFF", "#FFC9A8", "#FFE0C0", LiveKind.LAVA),
+        Theme("Neon", "#070617", "#990B0A2A", "#B0161448", "#00E5FF", "#FF2EE6", "#CC3A38A8", "#FFFFFF", "#A8B8FF", "#CFF8FF", LiveKind.NEON),
+        Theme("Waves", "#04202E", "#990A3446", "#B0104A63", "#26E0D0", "#4DA3FF", "#CC2A7A99", "#FFFFFF", "#9AD7EA", "#E6FBFF", LiveKind.WAVES),
+        Theme("Matrix", "#020A04", "#99061A0C", "#B0092A12", "#00FF66", "#B6FF3B", "#CC127A33", "#D6FFE0", "#6BE08A", "#7CFFB2", LiveKind.MATRIX),
+        Theme("RGB", "#101018", "#99181822", "#B0242434", "#FF4D8D", "#4DA3FF", "#CC4A4A66", "#FFFFFF", "#C8C8E0", "#FFFFFF", LiveKind.RGB)
     )
 
     // snow colours: auto (theme), then fixed colours, last = rainbow
@@ -196,6 +205,7 @@ class RioBoardService : InputMethodService() {
         lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
         snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
         effectIdx = prefs.getInt("effect", 0).coerceIn(0, EffectView.Type.values().size - 1)
+        loadPinned()
         haptic = prefs.getBoolean("haptic", true)
         keyPreview = prefs.getBoolean("preview", true)
         boomCountIdx = prefs.getInt("boom_count", 1).coerceIn(0, boomCounts.size - 1)
@@ -392,6 +402,7 @@ class RioBoardService : InputMethodService() {
             Panel.BOOM -> renderBoom()
             Panel.STATUS -> renderStatus()
             Panel.MAKER -> renderMaker()
+            Panel.TOOLS -> renderTools()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -407,105 +418,264 @@ class RioBoardService : InputMethodService() {
         barHolder.addView(if (showSug) suggestionStrip() else toolbar())
     }
 
-    // ----- toolbar (flat line icons, scrolls sideways) -----
-    private fun toolbar(): View {
-        val hsv = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        }
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        fun add(kind: IconView.Kind, active: Boolean = false, onClick: () -> Unit) {
-            val b = iconButton(kind, active, onClick)
-            b.layoutParams = LinearLayout.LayoutParams(dp(46), ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                setMargins(dp(1), dp(2), dp(1), dp(2))
-            }
-            bar.addView(b)
-        }
-        fun addText(label: String, sp: Float, active: Boolean, onClick: () -> Unit) {
-            val b = TextView(this).apply {
-                text = label
+    // =====================================================================
+    //  Top bar (6 pinned tools + expand button) and the "all tools" grid.
+    //  Hold a tool in the grid and drop it on a top-bar slot to pin it.
+    // =====================================================================
+    private class Tool(
+        val id: String, val label: String, val group: Int,
+        val kind: IconView.Kind?, val text: String?, val textSp: Float,
+        val active: () -> Boolean, val action: () -> Unit
+    )
+
+    private val toolGroups = listOf("Input", "Text", "Edit", "Cursor", "Look & extras")
+    private val defaultPinned = listOf("singlish", "emoji", "sticker", "clip", "fonts", "voice")
+    private var pinned = ArrayList<String>(defaultPinned)
+
+    private val toolList: List<Tool> by lazy {
+        fun ic(id: String, label: String, g: Int, k: IconView.Kind, active: () -> Boolean = { false }, a: () -> Unit) =
+            Tool(id, label, g, k, null, 0f, active, a)
+        fun tx(id: String, label: String, g: Int, t: String, sp: Float, active: () -> Boolean = { false }, a: () -> Unit) =
+            Tool(id, label, g, null, t, sp, active, a)
+        listOf(
+            // 0 input
+            ic("paste", "Paste", 0, IconView.Kind.CLIPBOARD) { pasteNow() },
+            ic("clip", "Clipboard", 0, IconView.Kind.HISTORY, { panel == Panel.CLIPBOARD }) { togglePanel(Panel.CLIPBOARD) },
+            ic("emoji", "Emoji", 0, IconView.Kind.EMOJI, { panel == Panel.EMOJI }) { togglePanel(Panel.EMOJI) },
+            ic("sticker", "Stickers & GIFs", 0, IconView.Kind.STICKER, { panel == Panel.MAKER }) { togglePanel(Panel.MAKER) },
+            ic("lang", "Language", 0, IconView.Kind.GLOBE) {
+                flushSinglish(); siMode = !siMode; symbols = false; panel = Panel.NONE; render()
+            },
+            tx("singlish", "Singlish", 0, "A→අ", 13f, { singlishOn }) { setSinglish(!singlishOn) },
+            ic("voice", "Voice typing", 0, IconView.Kind.MIC) { startVoice() },
+            // 1 text
+            tx("fonts", "Fonts", 1, "Aa", 16f, { fontStyle != 0 || rioStyle >= 0 || panel == Panel.FONTS }) { togglePanel(Panel.FONTS) },
+            ic("snips", "Shortcuts", 1, IconView.Kind.BOLT, { panel == Panel.SNIPS }) { togglePanel(Panel.SNIPS) },
+            tx("case", "Change case", 1, "a⇄A", 13f) { changeCase() },
+            ic("date", "Date & time", 1, IconView.Kind.CALENDAR) { insertDateTime() },
+            // 2 edit
+            ic("selall", "Select all", 2, IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) },
+            ic("copy", "Copy", 2, IconView.Kind.COPY) { menuAction(android.R.id.copy) },
+            ic("cut", "Cut", 2, IconView.Kind.CUT) { menuAction(android.R.id.cut) },
+            ic("undo", "Undo", 2, IconView.Kind.UNDO) { menuAction(android.R.id.undo) },
+            ic("redo", "Redo", 2, IconView.Kind.REDO) { menuAction(android.R.id.redo) },
+            ic("clear", "Clear all", 2, IconView.Kind.TRASH, { clearArmed }) { clearAllText() },
+            // 3 cursor
+            ic("home", "Home", 3, IconView.Kind.HOME) { sendDownUpKeyEvents(KeyEvent.KEYCODE_MOVE_HOME) },
+            ic("left", "Left", 3, IconView.Kind.LEFT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) },
+            ic("up", "Up", 3, IconView.Kind.UP) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_UP) },
+            ic("down", "Down", 3, IconView.Kind.DOWN) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_DOWN) },
+            ic("right", "Right", 3, IconView.Kind.RIGHT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) },
+            ic("end", "End", 3, IconView.Kind.END) { sendDownUpKeyEvents(KeyEvent.KEYCODE_MOVE_END) },
+            // 4 look & extras
+            ic("bg", "Background", 4, IconView.Kind.IMAGE, { panel == Panel.BACKGROUND || bgOn }) { togglePanel(Panel.BACKGROUND) },
+            ic("effects", "Effects", 4, IconView.Kind.SNOW, { snowMode != 0 }) { setSnow(if (snowMode != 0) 0 else lastSnow) },
+            ic("theme", "Theme", 4, IconView.Kind.THEME, { panel == Panel.THEME }) { togglePanel(Panel.THEME) },
+            ic("boom", "Boom", 4, IconView.Kind.BOMB, { panel == Panel.BOOM || boomRunning }) { togglePanel(Panel.BOOM) },
+            ic("status", "Statuses", 4, IconView.Kind.STATUS, { panel == Panel.STATUS }) { statusItems = null; togglePanel(Panel.STATUS) },
+            ic("settings", "Settings", 4, IconView.Kind.SETTINGS, { panel == Panel.SETTINGS }) { togglePanel(Panel.SETTINGS) }
+        )
+    }
+
+    private fun toolById(id: String): Tool? = toolList.firstOrNull { it.id == id }
+
+    private fun loadPinned() {
+        val raw = prefs.getString("pinned", null)?.split(",")
+            ?.filter { toolById(it) != null }?.distinct()?.toMutableList() ?: mutableListOf()
+        for (d in defaultPinned) if (raw.size < 6 && !raw.contains(d)) raw.add(d)
+        pinned = ArrayList(raw.take(6))
+    }
+
+    private fun savePinned() {
+        prefs.edit().putString("pinned", pinned.joinToString(",")).apply()
+    }
+
+    private fun ovalBg(color: Int) = android.graphics.drawable.GradientDrawable().apply {
+        shape = android.graphics.drawable.GradientDrawable.OVAL
+        setColor(color)
+    }
+
+    /** Round tool button (icon or text) like the Gboard top bar. */
+    private fun toolCircle(t: Tool, sizeDp: Int, active: Boolean): View {
+        val fl = FrameLayout(this)
+        fl.background = ovalBg(th.key)
+        if (t.kind != null) {
+            val iv = IconView(this, t.kind)
+            iv.tint = if (active) th.accent else th.text
+            val sz = dp((sizeDp * 0.56f).toInt())
+            fl.addView(iv, FrameLayout.LayoutParams(sz, sz, Gravity.CENTER))
+        } else {
+            fl.addView(TextView(this).apply {
+                text = t.text
                 gravity = Gravity.CENTER
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, t.textSp * (0.6f + sizeDp / 95f))
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(if (active) th.accent else th.text)
-                background = flatBg()
+            }, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER
+            ))
+        }
+        return fl
+    }
+
+    /** Closes the all-tools grid (if open) and runs the tool. */
+    private fun runTool(t: Tool) {
+        if (panel == Panel.TOOLS) {
+            panel = Panel.NONE
+            render()
+        }
+        t.action()
+    }
+
+    private fun startToolDrag(v: View, id: String, fromSlot: Int): Boolean {
+        return try {
+            val clip = android.content.ClipData.newPlainText("tool", id)
+            v.startDragAndDrop(clip, View.DragShadowBuilder(v), fromSlot, 0)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun dropOnSlot(slot: Int, id: String) {
+        if (toolById(id) == null || slot !in pinned.indices) return
+        val j = pinned.indexOf(id)
+        if (j >= 0 && j != slot) pinned[j] = pinned[slot]   // already pinned elsewhere -> swap
+        pinned[slot] = id
+        savePinned()
+        render()
+    }
+
+    private fun toolbar(): View {
+        val editing = panel == Panel.TOOLS
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            setPadding(dp(4), 0, dp(4), 0)
+        }
+        val circle = 38
+        pinned.forEachIndexed { i, id ->
+            val t = toolById(id) ?: return@forEachIndexed
+            val slot = FrameLayout(this).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
                 isClickable = true
                 setOnClickListener {
                     feedback(it)
-                    onClick()
-                }
-                layoutParams = LinearLayout.LayoutParams(dp(46), ViewGroup.LayoutParams.MATCH_PARENT).apply {
-                    setMargins(dp(1), dp(2), dp(1), dp(2))
+                    runTool(t)
                 }
             }
-            bar.addView(b)
-        }
-        fun divider() {
-            bar.addView(View(this).apply {
-                setBackgroundColor(th.special)
-                alpha = 0.6f
-                layoutParams = LinearLayout.LayoutParams(dp(1), dp(22)).apply {
-                    gravity = Gravity.CENTER_VERTICAL
-                    setMargins(dp(5), 0, dp(5), 0)
+            slot.addView(toolCircle(t, circle, t.active()), FrameLayout.LayoutParams(dp(circle), dp(circle), Gravity.CENTER))
+            if (editing) {
+                slot.setOnLongClickListener { startToolDrag(slot, t.id, i) }
+                slot.setOnDragListener { v, ev ->
+                    when (ev.action) {
+                        android.view.DragEvent.ACTION_DRAG_STARTED -> true
+                        android.view.DragEvent.ACTION_DRAG_ENTERED -> { v.alpha = 0.4f; true }
+                        android.view.DragEvent.ACTION_DRAG_EXITED, android.view.DragEvent.ACTION_DRAG_ENDED -> { v.alpha = 1f; true }
+                        android.view.DragEvent.ACTION_DROP -> {
+                            v.alpha = 1f
+                            val dropped = ev.clipData?.getItemAt(0)?.text?.toString()
+                            if (dropped != null) dropOnSlot(i, dropped)
+                            true
+                        }
+                        else -> false
+                    }
                 }
-            })
+            }
+            bar.addView(slot)
         }
 
-        // 1) input: paste, clipboard, emoji, language, voice
-        add(IconView.Kind.CLIPBOARD) { pasteNow() }
-        add(IconView.Kind.HISTORY, panel == Panel.CLIPBOARD) { togglePanel(Panel.CLIPBOARD) }
-        add(IconView.Kind.EMOJI, panel == Panel.EMOJI) { togglePanel(Panel.EMOJI) }
-        add(IconView.Kind.STICKER, panel == Panel.MAKER) { togglePanel(Panel.MAKER) }
-        add(IconView.Kind.GLOBE) { flushSinglish(); siMode = !siMode; symbols = false; panel = Panel.NONE; render() }
-        addText("A→අ", 13f, singlishOn) { setSinglish(!singlishOn) }
-        add(IconView.Kind.MIC) { startVoice() }
-        divider()
+        // expand / close button
+        val toggle = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            isClickable = true
+            setOnClickListener {
+                feedback(it)
+                flushSinglish()
+                panel = if (panel == Panel.TOOLS) Panel.NONE else Panel.TOOLS
+                render()
+            }
+        }
+        val tc = FrameLayout(this)
+        tc.background = ovalBg(th.key)
+        val iv = IconView(this, if (editing) IconView.Kind.CLOSE else IconView.Kind.DOWN)
+        iv.tint = th.text
+        val sz = dp((circle * 0.56f).toInt())
+        tc.addView(iv, FrameLayout.LayoutParams(sz, sz, Gravity.CENTER))
+        toggle.addView(tc, FrameLayout.LayoutParams(dp(circle), dp(circle), Gravity.CENTER))
+        bar.addView(toggle)
+        return bar
+    }
 
-        // 2) text: fonts, snippets, change case, date & time
-        addText("Aa", 16f, fontStyle != 0 || rioStyle >= 0 || panel == Panel.FONTS) { togglePanel(Panel.FONTS) }
-        add(IconView.Kind.BOLT, panel == Panel.SNIPS) { togglePanel(Panel.SNIPS) }
-        addText("a⇄A", 13f, false) { changeCase() }
-        add(IconView.Kind.CALENDAR) { insertDateTime() }
-        divider()
+    private fun toolCell(t: Tool): View {
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(2), dp(4), dp(2), dp(4))
+            }
+            isClickable = true
+            setOnClickListener {
+                feedback(it)
+                runTool(t)
+            }
+            setOnLongClickListener { startToolDrag(it, t.id, -1) }
+        }
+        col.addView(toolCircle(t, 54, t.active()), LinearLayout.LayoutParams(dp(54), dp(54)))
+        col.addView(TextView(this).apply {
+            text = t.label
+            setTextColor(th.text)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            gravity = Gravity.CENTER
+            maxLines = 2
+            setPadding(0, dp(4), 0, 0)
+        })
+        return col
+    }
 
-        // 3) edit: select, copy, cut, undo, redo, clear
-        add(IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) }
-        add(IconView.Kind.COPY) { menuAction(android.R.id.copy) }
-        add(IconView.Kind.CUT) { menuAction(android.R.id.cut) }
-        add(IconView.Kind.UNDO) { menuAction(android.R.id.undo) }
-        add(IconView.Kind.REDO) { menuAction(android.R.id.redo) }
-        add(IconView.Kind.TRASH, clearArmed) { clearAllText() }
-        divider()
-
-        // 4) cursor: home, left, up, down, right, end
-        add(IconView.Kind.HOME) { sendDownUpKeyEvents(KeyEvent.KEYCODE_MOVE_HOME) }
-        add(IconView.Kind.LEFT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT) }
-        add(IconView.Kind.UP) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_UP) }
-        add(IconView.Kind.DOWN) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_DOWN) }
-        add(IconView.Kind.RIGHT) { sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT) }
-        add(IconView.Kind.END) { sendDownUpKeyEvents(KeyEvent.KEYCODE_MOVE_END) }
-        divider()
-
-        // 5) look & extras: background, effects, theme, boom, status saver
-        add(IconView.Kind.IMAGE, panel == Panel.BACKGROUND || bgOn) { togglePanel(Panel.BACKGROUND) }
-        add(IconView.Kind.SNOW, snowMode != 0) { setSnow(if (snowMode != 0) 0 else lastSnow) }
-        add(IconView.Kind.THEME, panel == Panel.THEME) { togglePanel(Panel.THEME) }
-        add(IconView.Kind.BOMB, panel == Panel.BOOM || boomRunning) { togglePanel(Panel.BOOM) }
-        add(IconView.Kind.STATUS, panel == Panel.STATUS) { statusItems = null; togglePanel(Panel.STATUS) }
-        divider()
-
-        // 6) settings
-        add(IconView.Kind.SETTINGS, panel == Panel.SETTINGS) { togglePanel(Panel.SETTINGS) }
-        hsv.addView(
-            bar,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        )
-        hsv.setOnScrollChangeListener { _, x, _, _, _ -> toolbarX = x }
-        hsv.post { hsv.scrollTo(toolbarX, 0) }
-        return hsv
+    private fun renderTools() {
+        root.addView(TextView(this).apply {
+            text = "Hold and drag to customize top bar"
+            setTextColor(th.hint)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+        })
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), 0, dp(6), dp(12))
+        }
+        toolGroups.forEachIndexed { g, name ->
+            box.addView(TextView(this).apply {
+                text = name
+                setTextColor(th.hint)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(8), dp(10), dp(8), dp(2))
+            })
+            toolList.filter { it.group == g }.chunked(4).forEach { rowTools ->
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                rowTools.forEach { r.addView(toolCell(it)) }
+                repeat(4 - rowTools.size) {
+                    r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+                }
+                box.addView(r)
+            }
+        }
+        box.addView(TextView(this).apply {
+            text = "Reset top bar"
+            gravity = Gravity.CENTER
+            setTextColor(th.accent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setPadding(dp(8), dp(14), dp(8), dp(6))
+            isClickable = true
+            setOnClickListener {
+                pinned = ArrayList(defaultPinned)
+                savePinned()
+                render()
+            }
+        })
+        root.addView(panelBody(box))
     }
 
     private fun suggestionStrip(): View {
@@ -1085,19 +1255,34 @@ class RioBoardService : InputMethodService() {
         root.addView(panelHeader("Theme"))
         val grid = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(6), dp(4), dp(8))
+            setPadding(dp(4), dp(2), dp(4), dp(8))
         }
-        themes.withIndex().toList().chunked(4).forEach { items ->
-            val r = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
+        fun section(title: String, items: List<IndexedValue<Theme>>) {
+            grid.addView(TextView(this).apply {
+                text = title
+                setTextColor(th.hint)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(8), dp(8), dp(8), 0)
+            })
+            items.chunked(4).forEach { rowItems ->
+                val r = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                }
+                rowItems.forEach { (i, t) -> r.addView(swatch(i, t)) }
+                repeat(4 - rowItems.size) {
+                    r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+                }
+                grid.addView(r)
             }
-            items.forEach { (i, t) -> r.addView(swatch(i, t)) }
-            grid.addView(r)
         }
+        val all = themes.withIndex().toList()
+        section("Classic", all.filter { it.value.live == null })
+        section("Live themes (animated)", all.filter { it.value.live != null })
         root.addView(panelBody(grid))
     }
 
@@ -1110,13 +1295,33 @@ class RioBoardService : InputMethodService() {
             }
         }
         val selected = index == themeIdx
-        val circle = View(this).apply {
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(t.key)
-                setStroke(dp(if (selected) 4 else 2), if (selected) t.accent else t.special)
+        val ring = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(if (t.live == null) t.key else Color.TRANSPARENT)
+            setStroke(dp(if (selected) 4 else 2), if (selected) t.accent else t.special)
+        }
+        val circle: View = if (t.live == null) {
+            View(this).apply {
+                background = ring
+                layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
             }
-            layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
+        } else {
+            // small animated preview of the live theme inside a ring
+            FrameLayout(this).apply {
+                background = ring
+                layoutParams = LinearLayout.LayoutParams(dp(52), dp(52))
+                addView(View(this@RioBoardService).apply {
+                    background = LiveBgDrawable(t.live, resources.displayMetrics.density)
+                    clipToOutline = true
+                    outlineProvider = object : android.view.ViewOutlineProvider() {
+                        override fun getOutline(view: View, outline: android.graphics.Outline) {
+                            outline.setOval(0, 0, view.width, view.height)
+                        }
+                    }
+                }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
+                    setMargins(dp(4), dp(4), dp(4), dp(4))
+                })
+            }
         }
         val label = TextView(this).apply {
             text = t.name
@@ -2274,7 +2479,19 @@ class RioBoardService : InputMethodService() {
         reloadBackground()
     }
 
+    private var liveBg: LiveBgDrawable? = null
+    private var liveBgKind: LiveKind? = null
+
     private fun applyRootBg() {
+        val live = th.live
+        if (live != null) {
+            if (liveBg == null || liveBgKind != live) {
+                liveBg = LiveBgDrawable(live, resources.displayMetrics.density)
+                liveBgKind = live
+            }
+            root.background = liveBg
+            return
+        }
         val bmp = bgBitmap
         if (bgOn && bmp != null) {
             // photo + a see-through layer of the theme colour so keys stay readable
