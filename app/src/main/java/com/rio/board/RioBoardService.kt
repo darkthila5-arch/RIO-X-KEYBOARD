@@ -18,6 +18,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.StateListDrawable
 import android.inputmethodservice.InputMethodService
+import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -205,6 +206,10 @@ class RioBoardService : InputMethodService() {
     private var widthPct = 100
     private var heightPct = 100
     private var layoutKind = 0        // 0 Sinhala grid, 1 Wijesekara, 2 Tamil
+    private var soundLevel = 0        // 0 off, 1 low, 2 medium, 3 high
+    private var autoCap = true        // capital after . ? ! and "  " -> ". "
+    private var emojiSug = true       // emoji next to a fully typed word
+    private var lastSpaceMs = 0L
     private var undoCorr: Pair<String, String>? = null   // (corrected+separator, what was typed)
     private var swipeCommitted: String? = null
     private var swipeAlts: List<String> = emptyList()
@@ -288,6 +293,9 @@ class RioBoardService : InputMethodService() {
         widthPct = prefs.getInt("widthpct", 100).coerceIn(50, 100)
         heightPct = prefs.getInt("heightpct", 100).coerceIn(70, 140)
         layoutKind = prefs.getInt("langlayout", 0).coerceIn(0, 2)
+        soundLevel = prefs.getInt("sound", 0).coerceIn(0, 3)
+        autoCap = prefs.getBoolean("autocap", true)
+        emojiSug = prefs.getBoolean("emojisug", true)
         snips = Snips.load(prefs)
         loadRioStyles()
         loadBackground()
@@ -410,6 +418,7 @@ class RioBoardService : InputMethodService() {
         flushPendingVoice()
         flushPendingInsert()
         suggestions = computeSuggestions()
+        updateAutoCap(redraw = false)
         render()
         applySnow()
     }
@@ -1629,6 +1638,25 @@ class RioBoardService : InputMethodService() {
             suggestions = computeSuggestions()
             render()
         })
+        box.addView(settingLabel("Key sound (also needs touch sounds on in phone settings)"))
+        box.addView(chipRow(listOf("Off", "Low", "Medium", "High"), soundLevel) {
+            soundLevel = it
+            prefs.edit().putInt("sound", soundLevel).apply()
+        })
+        box.addView(settingLabel("Auto-capital and double-space → \". \""))
+        box.addView(chipRow(listOf("On", "Off"), if (autoCap) 0 else 1) {
+            autoCap = it == 0
+            prefs.edit().putBoolean("autocap", autoCap).apply()
+        })
+        box.addView(settingLabel("Emoji suggestions"))
+        box.addView(chipRow(listOf("On", "Off"), if (emojiSug) 0 else 1) {
+            emojiSug = it == 0
+            prefs.edit().putBoolean("emojisug", emojiSug).apply()
+        })
+        box.addView(settingLabel("Backup learned words and shortcuts"))
+        box.addView(chipRow(listOf("Copy backup", "Restore from clipboard"), -1) {
+            if (it == 0) backupToClipboard() else restoreFromClipboard()
+        })
         box.addView(settingLabel("Sinhala / Tamil layout"))
         box.addView(chipRow(listOf("Sinhala", "Wijesekara", "Tamil"), layoutKind) { setLayout(it) })
         box.addView(settingLabel("Typing"))
@@ -2010,6 +2038,14 @@ class RioBoardService : InputMethodService() {
     /** Light keyboard "tick" on key touch. */
     private fun keyTick(v: View) {
         if (haptic) v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        if (soundLevel > 0) {
+            try {
+                val vol = floatArrayOf(0f, 0.25f, 0.5f, 1f)[soundLevel]
+                (getSystemService(AUDIO_SERVICE) as AudioManager)
+                    .playSoundEffect(AudioManager.FX_KEYPRESS_STANDARD, vol)
+            } catch (e: Exception) {
+            }
+        }
     }
 
     /** iPhone-style bubble that shows the letter above the key while it is held. */
@@ -2091,14 +2127,24 @@ class RioBoardService : InputMethodService() {
                     handler.postDelayed(this, 50)
                 }
             }
+            var bx = 0f
             tv.setOnTouchListener { view, ev ->
                 when (ev.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         view.isPressed = true
                         pressAnim(view, true)
                         keyTick(view)
+                        bx = ev.rawX
                         k.onPress()
                         handler.postDelayed(r, 400)
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        // slide left on backspace: delete a word per step
+                        if (bx - ev.rawX > dp(36)) {
+                            handler.removeCallbacks(r)
+                            deleteWord()
+                            bx = ev.rawX
+                        }
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         view.isPressed = false
@@ -2121,6 +2167,9 @@ class RioBoardService : InputMethodService() {
             var longDone = false
             var altShown = false
             var swiping = false
+            var cursorMode = false
+            var lastX = 0f
+            var acc = 0f
             var downX = 0f
             var downY = 0f
             val longRun = Runnable {
@@ -2143,6 +2192,9 @@ class RioBoardService : InputMethodService() {
                         swiping = false
                         downX = ev.rawX
                         downY = ev.rawY
+                        lastX = ev.rawX
+                        acc = 0f
+                        cursorMode = false
                         if (previewable) showPreview(view, k.label)
                         if (!deferred) {
                             k.onPress()
@@ -2172,7 +2224,27 @@ class RioBoardService : InputMethodService() {
                                 }
                                 addSwipePoint(ev.rawX, ev.rawY)
                             }
+                        } else if (k.space) {
+                            // slide on the space bar to move the cursor
+                            if (!cursorMode && Math.abs(ev.rawX - downX) > dp(16)) {
+                                cursorMode = true
+                                handler.removeCallbacks(longRun)
+                                flushSinglish()
+                            }
+                            if (cursorMode) {
+                                acc += ev.rawX - lastX
+                                val step = dp(14).toFloat()
+                                while (acc >= step) {
+                                    sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_RIGHT)
+                                    acc -= step
+                                }
+                                while (acc <= -step) {
+                                    sendDownUpKeyEvents(KeyEvent.KEYCODE_DPAD_LEFT)
+                                    acc += step
+                                }
+                            }
                         }
+                        lastX = ev.rawX
                     }
                     MotionEvent.ACTION_UP -> {
                         view.isPressed = false
@@ -2189,6 +2261,7 @@ class RioBoardService : InputMethodService() {
                                 swiping = false
                                 endSwipe(true)
                             }
+                            cursorMode -> cursorMode = false
                             deferred && !longDone -> k.onPress()
                         }
                     }
@@ -2200,6 +2273,7 @@ class RioBoardService : InputMethodService() {
                         hideAlts()
                         if (swiping) endSwipe(false)
                         swiping = false
+                        cursorMode = false
                         altShown = false
                     }
                 }
@@ -2522,6 +2596,91 @@ class RioBoardService : InputMethodService() {
         toast(layoutNames[layoutKind])
     }
 
+    private fun deleteWord() {
+        val ic = currentInputConnection ?: return
+        undoCorr = null
+        if (sbuf.isNotEmpty()) {
+            sbuf.clear()
+            ic.setComposingText("", 1)
+            ic.finishComposingText()
+            return
+        }
+        val b = ic.getTextBeforeCursor(60, 0)?.toString() ?: return
+        if (b.isEmpty()) return
+        var i = b.length
+        while (i > 0 && b[i - 1].isWhitespace()) i--
+        while (i > 0 && !b[i - 1].isWhitespace()) i--
+        ic.deleteSurroundingText(b.length - i, 0)
+    }
+
+    /** Turn Shift on by itself at the start of a sentence (English layout only). */
+    private fun updateAutoCap(redraw: Boolean = true) {
+        if (!autoCap || siMode || symbols || singlishOn || passwordField || fontStyle != 0 || shift != 0) return
+        val ei = currentInputEditorInfo ?: return
+        val cls = ei.inputType and android.text.InputType.TYPE_MASK_CLASS
+        val variation = ei.inputType and android.text.InputType.TYPE_MASK_VARIATION
+        if (cls != android.text.InputType.TYPE_CLASS_TEXT) return
+        if (variation == android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS ||
+            variation == android.text.InputType.TYPE_TEXT_VARIATION_URI ||
+            variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS
+        ) return
+        val caps = currentInputConnection?.getCursorCapsMode(TextUtils.CAP_MODE_SENTENCES) ?: 0
+        if (caps != 0) {
+            shift = 1
+            if (redraw) render()
+        }
+    }
+
+    // ----- backup / restore of learned words, shortcuts (via the clipboard) -----
+    private val backupKeys = listOf("learned", "bigrams", "learned_roman", "snips")
+
+    private fun backupToClipboard() {
+        try {
+            val o = JSONObject()
+            o.put("rio_backup", 1)
+            for (k in backupKeys) prefs.getString(k, null)?.let { o.put(k, it) }
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("RIO BOARD backup", o.toString()))
+            toast("Backup copied - paste it into Notes or Saved messages")
+        } catch (e: Exception) {
+            toast("Could not copy backup")
+        }
+    }
+
+    private fun restoreFromClipboard() {
+        try {
+            val text = cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString() ?: ""
+            val o = JSONObject(text)
+            if (o.optInt("rio_backup", 0) != 1) {
+                toast("Clipboard has no RIO BOARD backup")
+                return
+            }
+            val e = prefs.edit()
+            for (k in backupKeys) if (o.has(k)) e.putString(k, o.getString(k))
+            e.apply()
+            learned.clear()
+            bigrams.clear()
+            learnedRoman.clear()
+            try {
+                val l = JSONObject(prefs.getString("learned", "{}"))
+                l.keys().forEach { learned[it] = l.getInt(it) }
+                val b = JSONObject(prefs.getString("bigrams", "{}"))
+                b.keys().forEach { prev ->
+                    val inner = b.getJSONObject(prev)
+                    val m = HashMap<String, Int>()
+                    inner.keys().forEach { nx -> m[nx] = inner.getInt(nx) }
+                    bigrams[prev] = m
+                }
+                val r = JSONObject(prefs.getString("learned_roman", "{}"))
+                r.keys().forEach { learnedRoman[it] = r.getInt(it) }
+            } catch (ex: Exception) {
+            }
+            snips = Snips.load(prefs)
+            toast("Backup restored")
+        } catch (e: Exception) {
+            toast("Clipboard has no RIO BOARD backup")
+        }
+    }
+
     // ---------- word suggestions ----------
     private fun isWordChar(c: Char): Boolean =
         c.isLetter() || c == '\'' || c == '\u200D' || c in '\u0D80'..'\u0DFF' || c in '\u0B80'..'\u0BFF'
@@ -2544,6 +2703,7 @@ class RioBoardService : InputMethodService() {
         val prefix = currentPrefix()
         if (prefix.isEmpty()) return nextWords()
         val lower = prefix.lowercase()
+        val emo = if (emojiSug) SinhalaDict.emojiFor(lower) else emptyList()
         val out = LinkedHashSet<String>()
         learned.entries
             .filter { it.key.startsWith(lower) && it.key != lower }
@@ -2554,7 +2714,8 @@ class RioBoardService : InputMethodService() {
             if (w.startsWith(lower) && w != lower) out.add(w)
         }
         val cap = prefix[0].isUpperCase()
-        return out.take(3).map { w -> if (cap) w.replaceFirstChar { it.uppercase() } else w }
+        val words = out.take(3).map { w -> if (cap) w.replaceFirstChar { it.uppercase() } else w }
+        return (emo.take(2) + words).take(3)
     }
 
     /** Word before the cursor's current word (lower-case), or null. */
@@ -2636,6 +2797,15 @@ class RioBoardService : InputMethodService() {
             swipeCommitted = null
         }
         flushSinglish()
+        // an emoji is added after the word instead of replacing it
+        if (word.isNotEmpty() && !Character.isLetterOrDigit(word.codePointAt(0))) {
+            val p = currentPrefix()
+            ic.commitText(if (p.isNotEmpty()) " $word " else "$word ", 1)
+            suggestions = emptyList()
+            refreshBar()
+            if (::snow.isInitialized) snow.burst()
+            return
+        }
         val prefix = currentPrefix()
         val prev = prevWordBefore(prefix.length)
         ic.beginBatchEdit()
@@ -2775,6 +2945,20 @@ class RioBoardService : InputMethodService() {
         undoCorr = null
         swipeCommitted = null
         val isSep = s.length == 1 && !isWordChar(s[0])
+        // two quick spaces after a word -> ". "
+        if (s == " " && sbuf.isEmpty() && autoCap && !passwordField && fontStyle == 0 && ic != null) {
+            val now = SystemClock.uptimeMillis()
+            val b = ic.getTextBeforeCursor(2, 0)?.toString() ?: ""
+            if (b.length == 2 && b[1] == ' ' && b[0].isLetterOrDigit() && now - lastSpaceMs < 600) {
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(1, 0)
+                ic.commitText(". ", 1)
+                ic.endBatchEdit()
+                lastSpaceMs = 0L
+                updateAutoCap()
+                return
+            }
+        }
         if (sbuf.isNotEmpty()) {
             val raw = sbuf.toString()
             // Singlish word in progress: a shortcut can still match its raw letters
@@ -2815,6 +2999,8 @@ class RioBoardService : InputMethodService() {
             }
         }
         ic?.commitText(s, 1)
+        if (s == " ") lastSpaceMs = SystemClock.uptimeMillis()
+        if (isSep) updateAutoCap()
         if (::snow.isInitialized) snow.burst()
     }
 
@@ -2874,6 +3060,7 @@ class RioBoardService : InputMethodService() {
 
     private fun pressEnter() {
         flushSinglish()
+        handler.postDelayed({ updateAutoCap() }, 120)
         val ei = currentInputEditorInfo
         if (ei == null) {
             sendDownUpKeyEvents(KeyEvent.KEYCODE_ENTER)

@@ -26,7 +26,19 @@ object SinhalaDict {
         "sthuuthiyi aayuboowan subha samaawenna karuNaakara bohoma godak poddak ikmanata ithaa " +
         "thamayi eka meeka eeka ooka mehe ehe ohoma mehema ekka ekak thawa " +
         "kaaema bath wathura pansala kadee waeda kathaa " +
-        "hamuwemu yamu okkoma siMhala laMkaawa jaya"
+        "hamuwemu yamu okkoma siMhala laMkaawa jaya " +
+        "eyaalaa oyaalaa Lamayaa Lamayi minisaa kenek kattiya puthaa dhuwa loku podi sahoodharayaa " +
+        "dhawal sathiya maasa awurudhdha welaawa kalin passee dhaenma ikmanin haemadhaama kawadhdha " +
+        "koLamba gamee nuwara paasala bas paara " +
+        "karannee yannee ennee kiyannee hithannee wennee kiyawanna liyanna igenaganna hoyanna " +
+        "dhaanawaa kiyawanawaa liyanawaa hondin narakayi aluth paraNa amaaru leesi waedi adu hondama " +
+        "koheta mokakdha kawuru kiiyak haebaeyi dhannee baeri " +
+        "suba mahaththayaa saadharayen jayaweewaa " +
+        "kiri paan thee maaLu aahaara koththu potha gaha mal gini handa ira wahinawaa wahinna " +
+        "salli mudhal gaana baeMkuwa pol dhekak thunak hathara paha haya hatha ata nawa dhahaya " +
+        "saha nisaa ehema bayayi aadharayi kammaeli badagini nidhi kaNagaatuyi sathutu kalabala pissu " +
+        "ewanna aayeth eliyata ethanata methana ethana kohe ahanna theerenawaa " +
+        "kaLaa gaththaa dhunnaa hithuwaa baeluwaa kaaewaa yaewwaa wunaa welaa thibuNaa thibenawaa"
         ).split(" ").filter { it.isNotBlank() }
 
     /** Sinhala-script forms of [roman] (used for prefix suggestions). */
@@ -170,6 +182,53 @@ object SinhalaDict {
     }
 
     fun next(prev: String): List<String> = nextMap[prev] ?: emptyList()
+
+    // ---------------------------------------------------------------- emoji suggestions
+
+    private val emojiEnglish: Map<String, List<String>> = mapOf(
+        "love" to listOf("❤️", "😍"), "heart" to listOf("❤️", "💕"), "happy" to listOf("😊", "😄"),
+        "sad" to listOf("😢", "😔"), "cry" to listOf("😭", "😢"), "haha" to listOf("😂", "🤣"),
+        "lol" to listOf("😂", "🤣"), "thanks" to listOf("🙏", "😊"), "thank" to listOf("🙏", "😊"),
+        "ok" to listOf("👍", "👌"), "okay" to listOf("👍", "👌"), "yes" to listOf("👍", "✅"),
+        "no" to listOf("🙅", "❌"), "good" to listOf("👍", "😊"), "great" to listOf("👏", "🙌"),
+        "nice" to listOf("👍", "😊"), "cool" to listOf("😎", "👍"), "sorry" to listOf("🙏", "😔"),
+        "please" to listOf("🙏", "🥺"), "hi" to listOf("👋", "😊"), "hello" to listOf("👋", "😊"),
+        "bye" to listOf("👋", "😊"), "sleep" to listOf("😴", "🛌"), "night" to listOf("🌙", "😴"),
+        "morning" to listOf("☀️", "🌄"), "food" to listOf("🍔", "🍕"), "eat" to listOf("🍽️", "😋"),
+        "hungry" to listOf("🍔", "😋"), "pizza" to listOf("🍕"), "coffee" to listOf("☕"),
+        "tea" to listOf("☕", "🍵"), "beer" to listOf("🍺"), "birthday" to listOf("🎂", "🎉"),
+        "party" to listOf("🎉", "🥳"), "congrats" to listOf("🎉", "👏"), "fire" to listOf("🔥"),
+        "money" to listOf("💰", "💵"), "home" to listOf("🏠"), "car" to listOf("🚗"),
+        "phone" to listOf("📱"), "music" to listOf("🎵", "🎶"), "sun" to listOf("☀️"),
+        "rain" to listOf("🌧️", "☔"), "angry" to listOf("😡"), "kiss" to listOf("😘"),
+        "star" to listOf("⭐", "🌟"), "wow" to listOf("😮", "🤩"), "smile" to listOf("😊", "😁"),
+        "tired" to listOf("😴", "😩"), "work" to listOf("💼"), "school" to listOf("🏫", "📚"),
+        "book" to listOf("📚"), "gift" to listOf("🎁"), "flower" to listOf("🌸", "🌹"),
+        "friend" to listOf("🤝", "😊"), "luck" to listOf("🍀", "🤞"), "strong" to listOf("💪"),
+        "think" to listOf("🤔"), "sick" to listOf("🤒", "😷"), "bored" to listOf("😒", "🥱")
+    )
+
+    private val emojiRoman: Map<String, List<String>> = mapOf(
+        "aadharee" to listOf("❤️", "😍"), "aadharayi" to listOf("❤️", "😘"),
+        "hari" to listOf("👍", "👌"), "sthuuthiyi" to listOf("🙏", "😊"),
+        "sathutuyi" to listOf("😊", "😄"), "sathutu" to listOf("😊"), "dhukayi" to listOf("😢", "😔"),
+        "lassanayi" to listOf("😍", "👌"), "lassana" to listOf("😍"), "bayayi" to listOf("😨", "😰"),
+        "badagini" to listOf("🍽️", "😋"), "nidhi" to listOf("😴"), "pissu" to listOf("🤪", "😜"),
+        "kaaema" to listOf("🍽️", "😋"), "thee" to listOf("☕"), "bath" to listOf("🍚"),
+        "subha" to listOf("🎉", "😊"),
+        "hondayi" to listOf("👍", "😊"), "narakayi" to listOf("👎", "😞"), "gedhara" to listOf("🏠"),
+        "salli" to listOf("💰"), "mal" to listOf("🌸"), "wahinawaa" to listOf("🌧️")
+    )
+
+    private val emojiMap: Map<String, List<String>> by lazy {
+        val m = HashMap<String, List<String>>()
+        m.putAll(emojiEnglish)
+        for ((k, v) in emojiRoman) m[Singlish.convert(k)] = v
+        m
+    }
+
+    /** Emoji that fit a fully typed word (lower-case), e.g. "love" -> ❤️ 😍. */
+    fun emojiFor(word: String): List<String> = emojiMap[word] ?: emptyList()
 
     // ---------------------------------------------------------------- swipe: English words
 
