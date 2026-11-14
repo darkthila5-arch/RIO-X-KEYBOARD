@@ -44,7 +44,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER }
 
     private class Key(
         val label: String,
@@ -391,6 +391,7 @@ class RioBoardService : InputMethodService() {
             Panel.BACKGROUND -> renderBackgrounds()
             Panel.BOOM -> renderBoom()
             Panel.STATUS -> renderStatus()
+            Panel.MAKER -> renderMaker()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -457,6 +458,7 @@ class RioBoardService : InputMethodService() {
         add(IconView.Kind.CLIPBOARD) { pasteNow() }
         add(IconView.Kind.HISTORY, panel == Panel.CLIPBOARD) { togglePanel(Panel.CLIPBOARD) }
         add(IconView.Kind.EMOJI, panel == Panel.EMOJI) { togglePanel(Panel.EMOJI) }
+        add(IconView.Kind.STICKER, panel == Panel.MAKER) { togglePanel(Panel.MAKER) }
         add(IconView.Kind.GLOBE) { flushSinglish(); siMode = !siMode; symbols = false; panel = Panel.NONE; render() }
         addText("A→අ", 13f, singlishOn) { setSinglish(!singlishOn) }
         add(IconView.Kind.MIC) { startVoice() }
@@ -1905,6 +1907,163 @@ class RioBoardService : InputMethodService() {
         ic.endBatchEdit()
         if (::snow.isInitialized) snow.burst()
         return true
+    }
+
+    // ----- sticker / GIF maker panel -----
+    private var makerDelete = false
+    private val makerThumbs = HashMap<String, Bitmap>()
+
+    private fun makerThumb(f: File): Bitmap? {
+        val key = f.name + f.lastModified()
+        makerThumbs[key]?.let { return it }
+        return try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(f.path, bounds)
+            var sample = 1
+            while (bounds.outWidth / sample > 200) sample *= 2
+            val bmp = BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = sample })
+            if (bmp != null) {
+                if (makerThumbs.size > 80) makerThumbs.clear()
+                makerThumbs[key] = bmp
+            }
+            bmp
+        } catch (e: Exception) {
+            null
+        } catch (e: OutOfMemoryError) {
+            null
+        }
+    }
+
+    private fun openMaker() {
+        flushSinglish()
+        try {
+            startActivity(Intent(this, MakerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun renderMaker() {
+        root.addView(panelHeader(if (makerDelete) "Tap a sticker to delete" else "Stickers & GIFs", IconView.Kind.TRASH) {
+            makerDelete = !makerDelete
+            render()
+        })
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(2), dp(8), dp(10))
+        }
+        val files = StickerStore.list(this)
+        box.addView(
+            hintText(
+                when {
+                    makerDelete -> "Delete mode: tap a sticker to remove it. Tap the bin again to stop."
+                    files.isEmpty() -> "Make your first emoji sticker or GIF with ＋ Create."
+                    else -> "Tap a sticker to send it"
+                }
+            )
+        )
+
+        fun cell(f: File?): View {
+            val lp = LinearLayout.LayoutParams(0, dp(78), 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+            if (f == null) {
+                return TextView(this).apply {
+                    text = "＋\nCreate"
+                    gravity = Gravity.CENTER
+                    setTextColor(Color.WHITE)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    typeface = Typeface.DEFAULT_BOLD
+                    background = roundBg(th.accent, 12)
+                    layoutParams = lp
+                    isClickable = true
+                    setOnClickListener {
+                        feedback(it)
+                        openMaker()
+                    }
+                }
+            }
+            return FrameLayout(this).apply {
+                layoutParams = lp
+                background = roundBg(if (makerDelete) Color.parseColor("#66FF5252") else th.key, 12)
+                isClickable = true
+                val iv = android.widget.ImageView(this@RioBoardService).apply {
+                    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                    setPadding(dp(4), dp(4), dp(4), dp(4))
+                    makerThumb(f)?.let { setImageBitmap(it) }
+                }
+                addView(iv, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                if (f.name.endsWith(".gif")) {
+                    addView(TextView(this@RioBoardService).apply {
+                        text = "GIF"
+                        setTextColor(Color.WHITE)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 9f)
+                        typeface = Typeface.DEFAULT_BOLD
+                        setPadding(dp(4), dp(1), dp(4), dp(1))
+                        background = roundBg(Color.parseColor("#AA000000"), 6)
+                    }, FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                        Gravity.BOTTOM or Gravity.START
+                    ).apply { setMargins(dp(4), 0, 0, dp(4)) })
+                }
+                setOnClickListener {
+                    feedback(it)
+                    if (makerDelete) {
+                        f.delete()
+                        render()
+                    } else {
+                        sendSticker(f)
+                    }
+                }
+            }
+        }
+
+        val cells = ArrayList<File?>()
+        cells.add(null)
+        cells.addAll(files)
+        cells.chunked(4).forEach { rowItems ->
+            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            rowItems.forEach { r.addView(cell(it)) }
+            repeat(4 - rowItems.size) {
+                r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+            }
+            box.addView(r)
+        }
+        root.addView(panelBody(box))
+    }
+
+    /** Sends a sticker/GIF into the text box (commitContent). Apps that refuse get the share sheet instead. */
+    private fun sendSticker(f: File) {
+        if (!f.exists()) {
+            render()
+            return
+        }
+        val mime = StickerStore.mimeOf(f)
+        val uri = RioFileProvider.uriFor(this, f)
+        var ok = false
+        val ic = currentInputConnection
+        if (ic != null && android.os.Build.VERSION.SDK_INT >= 25) {
+            try {
+                val info = android.view.inputmethod.InputContentInfo(
+                    uri, android.content.ClipDescription(f.name, arrayOf(mime)), null
+                )
+                ok = ic.commitContent(info, android.view.inputmethod.InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION, null)
+            } catch (e: Exception) {
+                ok = false
+            }
+        }
+        if (ok) {
+            if (::snow.isInitialized) snow.burst()
+            return
+        }
+        toast("This app can't take stickers directly. Pick where to send it.")
+        try {
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = android.content.ClipData.newRawUri("", uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(send, "Send sticker").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+        }
     }
 
     private fun openApp() {

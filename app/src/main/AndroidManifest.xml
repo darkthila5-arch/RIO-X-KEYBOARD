@@ -43,6 +43,21 @@
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
+        <!-- sticker / GIF studio, opened from the keyboard -->
+        <activity
+            android:name=".MakerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- serves made stickers/GIFs to other apps (read-only) -->
+        <provider
+            android:name=".RioFileProvider"
+            android:authorities="${applicationId}.stickers"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <service
             android:name=".RioBoardService"
             android:exported="true"

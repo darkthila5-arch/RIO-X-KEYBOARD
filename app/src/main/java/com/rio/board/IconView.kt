@@ -12,7 +12,7 @@ import android.view.View
 /** Simple line icons drawn in code (no image files needed). */
 class IconView(context: Context, private val kind: Kind) : View(context) {
 
-    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN }
+    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN, STICKER }
 
     var tint: Int = Color.WHITE
         set(value) {
@@ -204,6 +204,33 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
                 path.moveTo(8.5f, 11.5f)
                 path.lineTo(12f, 15.2f)
                 path.lineTo(15.5f, 11.5f)
+                c.drawPath(path, p)
+            }
+            Kind.STICKER -> {
+                // square sticker with a peeled bottom-right corner and a smiley
+                path.reset()
+                path.moveTo(6.5f, 3.5f)
+                path.lineTo(17.5f, 3.5f)
+                path.quadTo(20.5f, 3.5f, 20.5f, 6.5f)
+                path.lineTo(20.5f, 13f)
+                path.lineTo(13f, 20.5f)
+                path.lineTo(6.5f, 20.5f)
+                path.quadTo(3.5f, 20.5f, 3.5f, 17.5f)
+                path.lineTo(3.5f, 6.5f)
+                path.quadTo(3.5f, 3.5f, 6.5f, 3.5f)
+                path.close()
+                c.drawPath(path, p)
+                path.reset()
+                path.moveTo(20.5f, 13f)
+                path.lineTo(16f, 13f)
+                path.quadTo(13f, 13f, 13f, 16f)
+                path.lineTo(13f, 20.5f)
+                c.drawPath(path, p)
+                c.drawCircle(8.5f, 9f, 1.1f, fill)
+                c.drawCircle(14.5f, 9f, 1.1f, fill)
+                path.reset()
+                path.moveTo(7.8f, 12.6f)
+                path.quadTo(10f, 15f, 11.4f, 14.2f)
                 c.drawPath(path, p)
             }
             Kind.CALENDAR -> {
