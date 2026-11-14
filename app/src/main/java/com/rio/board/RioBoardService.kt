@@ -44,7 +44,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO, CALC }
 
     private class Key(
         val label: String,
@@ -423,6 +423,7 @@ class RioBoardService : InputMethodService() {
             Panel.MAKER -> renderMaker()
             Panel.TOOLS -> renderTools()
             Panel.CRYPTO -> renderCrypto()
+            Panel.CALC -> renderCalc()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -448,7 +449,7 @@ class RioBoardService : InputMethodService() {
         val active: () -> Boolean, val action: () -> Unit
     )
 
-    private val toolGroups = listOf("Input", "Text", "Edit", "Cursor", "Look & extras")
+    private val toolGroups = listOf("Input", "Text & tools", "Edit", "Cursor", "Look & extras")
     private val defaultPinned = listOf("singlish", "emoji", "sticker", "clip", "fonts", "voice")
     private var pinned = ArrayList<String>(defaultPinned)
 
@@ -473,6 +474,7 @@ class RioBoardService : InputMethodService() {
             ic("snips", "Shortcuts", 1, IconView.Kind.BOLT, { panel == Panel.SNIPS }) { togglePanel(Panel.SNIPS) },
             tx("case", "Change case", 1, "a⇄A", 13f) { changeCase() },
             ic("date", "Date & time", 1, IconView.Kind.CALENDAR) { insertDateTime() },
+            ic("calc", "Calculator", 1, IconView.Kind.CALC, { panel == Panel.CALC }) { openCalc() },
             ic("lock", "Secret message", 1, IconView.Kind.LOCK, { panel == Panel.CRYPTO }) { togglePanel(Panel.CRYPTO) },
             // 2 edit
             ic("selall", "Select all", 2, IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) },
@@ -2580,6 +2582,261 @@ class RioBoardService : InputMethodService() {
         )
         box.addView(hintText("Locked text starts with 🔒RIO: and only opens with the password. The person you send it to needs the RIO BOARD keyboard."))
         root.addView(panelBody(box))
+    }
+
+    // =====================================================================
+    //  Calculator panel: result/expression in the header, 5 x 5 key pad below
+    // =====================================================================
+    private val calcExpr = StringBuilder()
+    private var calcHist = ""
+    private var calcDone = false
+    private var calcErr = false
+    private var calcTop: TextView? = null
+    private var calcBot: TextView? = null
+
+    private val calcRows = listOf(
+        listOf("C", "⌫", "(", ")", "÷"),
+        listOf("7", "8", "9", "√", "×"),
+        listOf("4", "5", "6", "^", "−"),
+        listOf("1", "2", "3", "%", "+"),
+        listOf("0", ".", "=", "INS")
+    )
+
+    private fun openCalc() {
+        if (panel != Panel.CALC && calcExpr.isEmpty()) {
+            // a selected sum such as 12*5+3 is loaded straight into the calculator
+            val sel = selectedText().trim()
+            if (sel.isNotEmpty() && sel.length < 60 &&
+                Regex("^[0-9+\\-*/×÷−().% ^√]+$").matches(sel) && sel.any { it.isDigit() }
+            ) {
+                calcExpr.append(sel.replace(" ", "").replace('*', '×').replace('/', '÷').replace('-', '−'))
+                calcDone = false
+            }
+        }
+        togglePanel(Panel.CALC)
+    }
+
+    private fun isCalcOp(c: Char) = c == '+' || c == '−' || c == '×' || c == '÷' || c == '^'
+
+    private fun calcPress(k: String) {
+        if (k == "INS") {
+            calcInsert(false)
+            return
+        }
+        calcErr = false
+        when (k) {
+            "C" -> {
+                calcExpr.setLength(0)
+                calcHist = ""
+                calcDone = false
+            }
+            "⌫" -> {
+                if (calcDone) {
+                    calcDone = false
+                    calcHist = ""
+                }
+                if (calcExpr.isNotEmpty()) calcExpr.setLength(calcExpr.length - 1)
+            }
+            "=" -> calcEquals()
+            else -> calcAppend(k[0])
+        }
+        calcRefresh()
+    }
+
+    private fun calcAppend(k: Char) {
+        val startsValue = k.isDigit() || k == '.' || k == '(' || k == '√'
+        if (calcDone) {
+            if (startsValue) calcExpr.setLength(0)      // new sum; an operator carries on with the result
+            calcDone = false
+            calcHist = ""
+        }
+        val last = if (calcExpr.isNotEmpty()) calcExpr[calcExpr.length - 1] else ' '
+        when {
+            k.isDigit() -> {
+                if (last == ')' || last == '%') calcExpr.append('×')
+                calcExpr.append(k)
+            }
+            k == '.' -> {
+                var i = calcExpr.length - 1
+                while (i >= 0 && (calcExpr[i].isDigit() || calcExpr[i] == '.')) i--
+                val seg = calcExpr.substring(i + 1)
+                if (seg.contains('.')) return
+                if (seg.isEmpty()) {
+                    if (last == ')' || last == '%') calcExpr.append('×')
+                    calcExpr.append('0')
+                }
+                calcExpr.append('.')
+            }
+            k == '(' || k == '√' -> {
+                if (last == ')' || last == '%') calcExpr.append('×')
+                calcExpr.append(k)
+            }
+            k == ')' -> {
+                val open = calcExpr.count { it == '(' } - calcExpr.count { it == ')' }
+                if (open > 0 && (last.isDigit() || last == ')' || last == '%')) calcExpr.append(')')
+            }
+            k == '%' -> {
+                if (last.isDigit() || last == ')') calcExpr.append('%')
+            }
+            isCalcOp(k) -> {
+                if (calcExpr.isEmpty() || last == '(' || last == '√') {
+                    if (k == '−') calcExpr.append(k)          // a leading minus is allowed
+                } else if (isCalcOp(last)) {
+                    // 5×−3 is fine, otherwise the new operator replaces the old one
+                    if (k == '−' && (last == '×' || last == '÷' || last == '^')) calcExpr.append(k)
+                    else {
+                        calcExpr.setLength(calcExpr.length - 1)
+                        if (calcExpr.isNotEmpty()) calcExpr.append(k)
+                    }
+                } else {
+                    calcExpr.append(k)
+                }
+            }
+        }
+    }
+
+    private fun calcEquals() {
+        val s = calcExpr.toString()
+        if (s.isEmpty() || calcDone) return
+        val v = Calc.eval(s)
+        if (v == null) {
+            calcErr = true
+            return
+        }
+        calcHist = "$s ="
+        calcExpr.setLength(0)
+        calcExpr.append(Calc.format(v).replace('-', '−'))
+        calcDone = true
+    }
+
+    /** Types "12×5+3 = 63" into the chat (long-press: just the result). */
+    private fun calcInsert(resultOnly: Boolean) {
+        val text: String
+        if (calcDone) {
+            val result = calcExpr.toString()
+            val expr = calcHist.removeSuffix(" =")
+            text = if (resultOnly) result else "$expr = $result"
+        } else {
+            val s = calcExpr.toString()
+            val v = Calc.eval(s) ?: return
+            val result = Calc.format(v).replace('-', '−')
+            val plainNumber = s.all { it.isDigit() || it == '.' }
+            text = if (resultOnly || plainNumber) result else "$s = $result"
+        }
+        flushSinglish()
+        currentInputConnection?.commitText(text, 1)
+        if (::snow.isInitialized) snow.burst()
+    }
+
+    private fun calcRefresh() {
+        val top = calcTop ?: return
+        val bot = calcBot ?: return
+        if (calcDone) {
+            top.text = calcExpr.toString()
+            bot.text = calcHist
+            bot.setTextColor(th.hint)
+        } else {
+            top.text = calcExpr.toString().ifEmpty { "0" }
+            val live = if (calcErr) null else Calc.eval(calcExpr.toString())
+            val liveText = if (live != null) Calc.format(live).replace('-', '−') else ""
+            when {
+                calcErr -> {
+                    bot.text = "Error"
+                    bot.setTextColor(0xFFFF5252.toInt())
+                }
+                liveText.isNotEmpty() && liveText != calcExpr.toString() -> {
+                    bot.text = "= $liveText"
+                    bot.setTextColor(th.accent)
+                }
+                else -> bot.text = ""
+            }
+        }
+    }
+
+    private fun renderCalc() {
+        // header: back button + expression/result display
+        val h = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
+        }
+        h.addView(backButton())
+        val disp = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            setPadding(dp(6), 0, dp(14), 0)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+        }
+        val top = TextView(this).apply {
+            setTextColor(th.text)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.END
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.START
+        }
+        val bot = TextView(this).apply {
+            setTextColor(th.hint)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+            gravity = Gravity.END
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.START
+        }
+        disp.addView(top)
+        disp.addView(bot)
+        h.addView(disp)
+        calcTop = top
+        calcBot = bot
+        root.addView(h)
+
+        // key pad
+        val pad = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH * 4))
+            setPadding(dp(3), 0, dp(3), dp(3))
+        }
+        for (rowKeys in calcRows) {
+            val r = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
+            for (k in rowKeys) {
+                val digit = k.length == 1 && (k[0].isDigit() || k[0] == '.')
+                val bg = when {
+                    k == "=" -> th.accent
+                    k == "INS" -> th.active
+                    digit -> th.key
+                    else -> th.special
+                }
+                val label = if (k == "INS") "Insert ↵" else k
+                val tv = TextView(this).apply {
+                    text = label
+                    gravity = Gravity.CENTER
+                    setTextColor(if (k == "=" || k == "INS") Color.WHITE else th.text)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, if (k == "INS") 14f else 19f)
+                    typeface = if (digit) Typeface.DEFAULT else Typeface.DEFAULT_BOLD
+                    background = roundBg(bg, 10)
+                    isClickable = true
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, if (k == "INS") 2f else 1f)
+                        .apply { setMargins(dp(2), dp(2), dp(2), dp(2)) }
+                    setOnClickListener {
+                        feedback(it)
+                        calcPress(k)
+                    }
+                    if (k == "INS") setOnLongClickListener {
+                        calcInsert(true)
+                        true
+                    } else if (k == "⌫") setOnLongClickListener {
+                        calcPress("C")
+                        true
+                    }
+                }
+                r.addView(tv)
+            }
+            pad.addView(r)
+        }
+        root.addView(pad)
+        calcRefresh()
     }
 
     private fun flushPendingVoice() {
