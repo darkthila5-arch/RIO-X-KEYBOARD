@@ -10,6 +10,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
+import android.graphics.SweepGradient
 import android.os.SystemClock
 import android.view.View
 import java.util.Random
@@ -18,14 +19,15 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 /**
- * Transparent overlay with 7 effects: SNOW, DROPS (water drops sliding down glass),
- * LEAVES (tumbling leaves), FLOWERS (falling petals), SMOKE (rising plumes),
- * FIRE (flickering flames + sparks), HEARTS (floating glossy hearts).
+ * Transparent overlay with 11 effects: SNOW, DROPS (water drops sliding down glass),
+ * LEAVES (tumbling leaves), FLOWERS (falling blossoms), SMOKE (rising plumes),
+ * FIRE (flickering flames + sparks), HEARTS (floating glossy hearts),
+ * RAIN, FIREFLIES, BUBBLES, STARS.
  * Replaces SnowView (same API + [type] + [natural]). Does not consume touches.
  */
 class EffectView(context: Context) : View(context) {
 
-    enum class Type { SNOW, DROPS, LEAVES, FLOWERS, SMOKE, FIRE, HEARTS }
+    enum class Type { SNOW, DROPS, LEAVES, FLOWERS, SMOKE, FIRE, HEARTS, RAIN, FIREFLIES, BUBBLES, STARS }
 
     // ---------- public API (same as SnowView) ----------
     var type: Type = Type.SNOW
@@ -77,6 +79,10 @@ class EffectView(context: Context) : View(context) {
                 repeat(2) { if (sparks.size < 40) sparks.add(newSpark()) }
             }
             Type.HEARTS -> repeat(2) { if (hearts.size < base * 2) hearts.add(newHeart(false)) }
+            Type.RAIN -> repeat(6) { addSplash(rnd.nextFloat() * width, 200, rnd.nextInt(1000)) }
+            Type.FIREFLIES -> for (f in flies) if (rnd.nextFloat() < 0.25f) f.boost = 1f
+            Type.BUBBLES -> repeat(2) { if (bubbles.size < base * 3 / 2) bubbles.add(newBubble(false)) }
+            Type.STARS -> if (stars.isNotEmpty()) repeat(4) { stars[rnd.nextInt(stars.size)].flash = 1f }
         }
     }
 
@@ -92,6 +98,10 @@ class EffectView(context: Context) : View(context) {
         puffs.clear(); puffsFilled = false; puffAcc = 0f
         flames.clear(); sparks.clear(); fireAcc = 0f; sparkAcc = 0f
         hearts.clear(); heartsFilled = false; heartAcc = 0f
+        streaks.clear(); splashes.clear(); rainFilled = false
+        flies.clear()
+        bubbles.clear(); bubblesFilled = false; bubbleAcc = 0f
+        stars.clear(); shoots.clear(); starsFilled = false; shootIn = 3f
     }
 
     private fun palette(): IntArray = if (colors.isEmpty()) intArrayOf(Color.WHITE) else colors
@@ -114,6 +124,10 @@ class EffectView(context: Context) : View(context) {
             Type.SMOKE -> drawSmoke(canvas, dt)
             Type.FIRE -> drawFire(canvas, dt)
             Type.HEARTS -> drawHearts(canvas, dt)
+            Type.RAIN -> drawRain(canvas, dt)
+            Type.FIREFLIES -> drawFireflies(canvas, dt)
+            Type.BUBBLES -> drawBubbles(canvas, dt)
+            Type.STARS -> drawStars(canvas, dt)
         }
         canvas.restore()
         postInvalidateOnAnimation()
@@ -486,127 +500,235 @@ class EffectView(context: Context) : View(context) {
     }
 
     // =====================================================================
-    //  FLOWERS – realistic falling flower petals (sakura / rose / custom).
-    //
-    //  Each petal is a smooth teardrop shape drawn with cubicTo bezier
-    //  curves.  Physics: gravity + gentle air-drag + horizontal wind drift
-    //  + sinusoidal sway.  3-D feel: petal flips around its long axis
-    //  (cos-scaled scaleX), back-face is a darker tint.  A soft radial
-    //  gradient gives the petal a slightly lighter centre so it looks
-    //  paper-thin rather than flat.  A tiny white specular dot sits at the
-    //  upper-left for a slightly waxy / glossy petal look.
+    //  FLOWERS – whole blossoms tumbling down (not just petals):
+    //    0 sakura   – 5 notched petals, deeper pink towards the middle, stamens
+    //    1 daisy    – 13 slim petals around a golden disc
+    //    2 cosmos   – 8 wide toothed petals, golden centre
+    //    3 loose petal – single notched sakura petal that flips as it falls
+    //  Flowers turn in-plane and tilt (squash) like a real flower catching
+    //  the wind; when tilted past edge-on you see the darker back side.
     // =====================================================================
 
-    /** One falling petal. All angles in radians unless noted. */
     private class Petal(
-        var x: Float,          // screen X (updated each frame)
-        var y: Float,          // screen Y
-        val w: Float,          // half-width of petal (pre-scaled to dp)
-        val h: Float,          // half-height of petal
-        val vy: Float,         // base downward speed (dp/s)
-        var vx: Float,         // lateral speed (dp/s, can be negative)
-        var phase: Float,      // sway oscillation phase
-        val swayAmp: Float,    // horizontal sway amplitude (dp)
-        val swayFreq: Float,   // sway frequency (rad/s)
-        var tilt: Float,       // current 3-D flip angle (radians)
-        val tiltSpd: Float,    // flip speed (rad/s)
-        var spin: Float,       // in-plane rotation angle (degrees)
-        val spinSpd: Float,    // in-plane rotation speed (deg/s)
-        val baseColor: Int,    // face colour
-        val darkColor: Int,    // back-face / shadow colour
-        val alpha: Int         // 160-255
+        var x: Float, var y: Float,
+        val r: Float,            // flower radius / loose-petal half-height (px)
+        val kind: Int,           // 0 sakura, 1 daisy, 2 cosmos, 3 loose petal
+        val aspect: Float,       // loose petal width / height
+        val vy: Float, var vx: Float,
+        var phase: Float, val swayAmp: Float, val swayFreq: Float,
+        var tilt: Float, val tiltSpd: Float,
+        var spin: Float, val spinSpd: Float,
+        val tint: Int, val deep: Int, val back: Int, val centre: Int,
+        val alpha: Int
     )
 
     private val petals = ArrayList<Petal>()
     private var petalsFilled = false
 
-    // natural sakura palette – soft pinks and near-whites
     private val sakura = intArrayOf(
-        0xFFFFB7C5.toInt(), // sakura pink
-        0xFFFF8FAB.toInt(), // deeper rose
-        0xFFFFC0CB.toInt(), // classic pink
-        0xFFFFD1DC.toInt(), // blush
-        0xFFFFECF1.toInt(), // near white petal
-        0xFFE91E8C.toInt(), // vivid pink accent
-        0xFFFF6F91.toInt(), // coral petal
-        0xFFF8BBD0.toInt()  // pale rose
+        0xFFFFB7C5.toInt(), 0xFFFF8FAB.toInt(), 0xFFFFC0CB.toInt(), 0xFFFFD1DC.toInt(),
+        0xFFFFECF1.toInt(), 0xFFFF9DB5.toInt(), 0xFFFF6F91.toInt(), 0xFFF8BBD0.toInt()
+    )
+    private val cosmosCols = intArrayOf(
+        0xFFE83E8C.toInt(), 0xFFFF6FA8.toInt(), 0xFFF06292.toInt(),
+        0xFFFF8A65.toInt(), 0xFFFFFFFF.toInt(), 0xFFBA68C8.toInt()
     )
 
-    // unit petal path: tip at (0, -1), base at (0, 1), max width ~±0.65 at y≈0
-    // Looks like a rounded teardrop / rose petal.
-    private val petalPath = Path().apply {
-        moveTo(0f, -1f)
-        cubicTo( 0.70f, -0.55f,  0.68f,  0.45f, 0f,  1f)
-        cubicTo(-0.68f,  0.45f, -0.70f, -0.55f, 0f, -1f)
+    // all petal paths: base at (0,0), tip at y = -1
+    private val sakuraPetal = Path().apply {
+        moveTo(0f, 0f)
+        cubicTo(-0.60f, -0.22f, -0.70f, -0.88f, -0.20f, -1.00f)
+        quadTo(0f, -0.78f, 0.20f, -1.00f)
+        cubicTo(0.70f, -0.88f, 0.60f, -0.22f, 0f, 0f)
+        close()
+    }
+    private val daisyPetal = Path().apply {
+        moveTo(0f, 0f)
+        cubicTo(-0.22f, -0.25f, -0.20f, -0.82f, 0f, -1.00f)
+        cubicTo(0.20f, -0.82f, 0.22f, -0.25f, 0f, 0f)
+        close()
+    }
+    private val cosmosPetal = Path().apply {
+        moveTo(0f, 0f)
+        cubicTo(-0.58f, -0.25f, -0.62f, -0.82f, -0.32f, -1.00f)
+        lineTo(-0.16f, -0.90f)
+        lineTo(0f, -1.00f)
+        lineTo(0.16f, -0.90f)
+        lineTo(0.32f, -1.00f)
+        cubicTo(0.62f, -0.82f, 0.58f, -0.25f, 0f, 0f)
         close()
     }
 
-    // Right half darker for depth
-    private val petalRight = Path().apply {
-        moveTo(0f, -1f)
-        cubicTo(0.70f, -0.55f, 0.68f, 0.45f, 0f, 1f)
-        close()
-    }
-
-    private val petalFillP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val petalShadeP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val petalSpecP  = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL; color = Color.WHITE
-    }
-    private val petalVeinP  = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val bloomBounds = RectF(-1.15f, -1.15f, 1.15f, 1.15f)
+    private val bloomP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val bloomGlowP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val bloomEdgeP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
+        strokeWidth = 0.03f
         strokeCap = Paint.Cap.ROUND
     }
 
     private fun maxPetals() = maxOf(20, base)
 
-    private fun petalColor(): Pair<Int, Int> {
-        val col: Int = if (natural) {
-            sakura[rnd.nextInt(sakura.size)]
+    private fun newPetal(fromTop: Boolean): Petal {
+        val roll = rnd.nextFloat()
+        val kind = if (natural) {
+            when { roll < 0.45f -> 0; roll < 0.60f -> 1; roll < 0.75f -> 2; else -> 3 }
+        } else {
+            when { roll < 0.40f -> 0; roll < 0.55f -> 1; roll < 0.75f -> 2; else -> 3 }
+        }
+        val size = if (kind == 3) (5f + rnd.nextFloat() * 6f) * d else (7f + rnd.nextFloat() * 8f) * d
+        val span = (height - topLimit).coerceAtLeast(1f)
+        val y = if (fromTop) topLimit - size * 2f - rnd.nextFloat() * 60f * d
+        else topLimit + rnd.nextFloat() * span
+
+        val base0: Int = if (natural) {
+            when (kind) {
+                1 -> if (rnd.nextBoolean()) 0xFFFFFFFF.toInt() else 0xFFFFFAEB.toInt()
+                2 -> cosmosCols[rnd.nextInt(cosmosCols.size)]
+                else -> sakura[rnd.nextInt(sakura.size)]
+            }
         } else {
             val pal = palette()
-            val c0 = pal[rnd.nextInt(pal.size)]
-            Color.colorToHSV(c0, hsv)
-            // slightly randomize brightness so not all petals look identical
+            Color.colorToHSV(pal[rnd.nextInt(pal.size)], hsv)
             hsv[1] = (hsv[1] * (0.6f + rnd.nextFloat() * 0.4f)).coerceIn(0f, 1f)
             hsv[2] = (hsv[2] * (0.75f + rnd.nextFloat() * 0.35f)).coerceIn(0.25f, 1f)
             Color.HSVToColor(hsv)
         }
-        // darker variant for back-face and right-half shadow
-        Color.colorToHSV(col, hsv)
-        hsv[2] = (hsv[2] * 0.58f).coerceAtLeast(0.05f)
-        hsv[1] = (hsv[1] * 1.15f).coerceIn(0f, 1f)
-        val dark = Color.HSVToColor(hsv)
-        return col to dark
-    }
-
-    private fun newPetal(fromTop: Boolean): Petal {
-        val size = (5f + rnd.nextFloat() * 9f) * d  // 5-14 dp half-height
-        val aspect = 0.52f + rnd.nextFloat() * 0.26f // width/height ratio 0.52-0.78
-        val span = (height - topLimit).coerceAtLeast(1f)
-        val y = if (fromTop) topLimit - size * 2f - rnd.nextFloat() * 60f * d
-                else         topLimit + rnd.nextFloat() * span
-
-        val (col, dark) = petalColor()
+        val tint = if (natural && (kind == 0 || kind == 3)) mixRgb(base0, Color.WHITE, 0.30f)
+        else base0 or (0xFF shl 24)
+        val deep = when {
+            natural && (kind == 0 || kind == 3) -> mixRgb(base0, 0xC2185B, 0.55f)
+            natural && kind == 1 -> 0xFFD2D2C8.toInt()
+            else -> mixRgb(base0, Color.BLACK, 0.35f)
+        }
+        val back = mixRgb(tint, Color.BLACK, 0.20f)
+        val centre = if (kind == 0) 0xFFF2DC6B.toInt() else 0xFFFFB300.toInt()
 
         return Petal(
-            x          = rnd.nextFloat() * width,
-            y          = y,
-            w          = size * aspect,
-            h          = size,
-            vy         = (22f + rnd.nextFloat() * 38f) * d,   // 22-60 dp/s fall speed
-            vx         = (rnd.nextFloat() - 0.5f) * 18f * d,  // initial lateral drift
-            phase      = rnd.nextFloat() * 6.28f,
-            swayAmp    = (12f + rnd.nextFloat() * 28f) * d,   // 12-40 dp sway
-            swayFreq   = 0.7f + rnd.nextFloat() * 1.1f,       // sway cycles/s
-            tilt       = rnd.nextFloat() * 6.28f,
-            tiltSpd    = (0.9f + rnd.nextFloat() * 1.8f) * (if (rnd.nextBoolean()) 1f else -1f),
-            spin       = rnd.nextFloat() * 360f,
-            spinSpd    = (8f + rnd.nextFloat() * 25f) * (if (rnd.nextBoolean()) 1f else -1f),
-            baseColor  = col,
-            darkColor  = dark,
-            alpha      = (165 + rnd.nextInt(80))               // 165-245
+            x = rnd.nextFloat() * width, y = y,
+            r = size,
+            kind = kind,
+            aspect = 0.62f + rnd.nextFloat() * 0.2f,
+            vy = (24f + rnd.nextFloat() * 32f) * d,
+            vx = (rnd.nextFloat() - 0.5f) * 18f * d,
+            phase = rnd.nextFloat() * 6.28f,
+            swayAmp = (12f + rnd.nextFloat() * 26f) * d,
+            swayFreq = 0.7f + rnd.nextFloat() * 1.0f,
+            tilt = rnd.nextFloat() * 6.28f,
+            tiltSpd = (if (kind == 3) 1.6f + rnd.nextFloat() * 1.8f else 0.5f + rnd.nextFloat() * 0.9f) *
+                (if (rnd.nextBoolean()) 1f else -1f),
+            spin = rnd.nextFloat() * 360f,
+            spinSpd = (10f + rnd.nextFloat() * 30f) * (if (rnd.nextBoolean()) 1f else -1f),
+            tint = tint, deep = deep, back = back, centre = centre,
+            alpha = 200 + rnd.nextInt(56)
         )
+    }
+
+    private fun drawBlossom(canvas: Canvas, p: Petal) {
+        val c = cos(p.tilt)
+        val front = c >= 0f
+        val sq = 0.42f + 0.58f * abs(c)
+        val path = when (p.kind) { 0 -> sakuraPetal; 1 -> daisyPetal; else -> cosmosPetal }
+        val n = when (p.kind) { 0 -> 5; 1 -> 13; else -> 8 }
+
+        canvas.save()
+        canvas.translate(p.x, p.y)
+        canvas.rotate(p.spin)
+        canvas.scale(p.r, p.r * sq)
+        canvas.saveLayerAlpha(bloomBounds, p.alpha)
+
+        val step = 360f / n
+        for (i in 0 until n) {
+            canvas.save()
+            canvas.rotate(i * step)
+            bloomP.color = if (front) p.tint else p.back
+            canvas.drawPath(path, bloomP)
+            bloomEdgeP.color = p.deep
+            bloomEdgeP.alpha = if (front) 110 else 60
+            canvas.drawPath(path, bloomEdgeP)
+            canvas.restore()
+        }
+
+        if (front) {
+            if (p.kind != 1) {
+                // petals get deeper in colour towards the heart of the flower
+                bloomGlowP.shader = soft(quant(p.deep))
+                bloomGlowP.alpha = 150
+                canvas.save()
+                canvas.scale(0.62f, 0.62f)
+                canvas.drawCircle(0f, 0f, 1f, bloomGlowP)
+                canvas.restore()
+                bloomGlowP.shader = null
+            }
+            when (p.kind) {
+                0 -> {
+                    for (i in 0 until 10) {
+                        canvas.save()
+                        canvas.rotate(i * 36f + 7f)
+                        val len = 0.30f + (i % 3) * 0.045f
+                        bloomEdgeP.color = p.deep
+                        bloomEdgeP.alpha = 210
+                        bloomEdgeP.strokeWidth = 0.028f
+                        canvas.drawLine(0f, 0f, 0f, -len, bloomEdgeP)
+                        bloomP.color = p.centre
+                        canvas.drawCircle(0f, -len, 0.05f, bloomP)
+                        canvas.restore()
+                    }
+                    bloomEdgeP.strokeWidth = 0.03f
+                    bloomP.color = p.deep
+                    canvas.drawCircle(0f, 0f, 0.07f, bloomP)
+                }
+                1 -> {
+                    bloomP.color = mixRgb(p.centre, Color.BLACK, 0.25f)
+                    canvas.drawCircle(0f, 0f, 0.30f, bloomP)
+                    bloomP.color = p.centre
+                    canvas.drawCircle(0f, 0f, 0.24f, bloomP)
+                    bloomP.color = (0xA0 shl 24) or (mixRgb(p.centre, Color.WHITE, 0.5f) and 0xFFFFFF)
+                    canvas.drawCircle(-0.06f, -0.07f, 0.09f, bloomP)
+                }
+                else -> {
+                    bloomP.color = mixRgb(p.centre, Color.BLACK, 0.25f)
+                    canvas.drawCircle(0f, 0f, 0.15f, bloomP)
+                    bloomP.color = p.centre
+                    canvas.drawCircle(0f, 0f, 0.11f, bloomP)
+                }
+            }
+        } else {
+            bloomP.color = p.deep
+            canvas.drawCircle(0f, 0f, 0.10f, bloomP)
+        }
+
+        canvas.restore()   // layer
+        canvas.restore()
+    }
+
+    private fun drawLoosePetal(canvas: Canvas, p: Petal) {
+        val fl = cos(p.tilt)
+        val absF = maxOf(0.10f, abs(fl))
+        val front = fl >= 0f
+        canvas.save()
+        canvas.translate(p.x, p.y)
+        canvas.rotate(p.spin)
+        canvas.scale(p.r * p.aspect * absF, p.r)
+        canvas.translate(0f, 0.5f)      // pivot in the middle of the petal
+
+        bloomP.color = if (front) p.tint else p.back
+        bloomP.alpha = if (front) p.alpha else (p.alpha * 0.8f).toInt()
+        canvas.drawPath(sakuraPetal, bloomP)
+        if (front) {
+            // deeper colour near the base
+            canvas.save()
+            canvas.scale(0.5f, 0.45f)
+            bloomP.color = p.deep
+            bloomP.alpha = (p.alpha * 0.40f).toInt()
+            canvas.drawPath(sakuraPetal, bloomP)
+            canvas.restore()
+        }
+        bloomEdgeP.color = p.deep
+        bloomEdgeP.alpha = 80
+        canvas.drawPath(sakuraPetal, bloomEdgeP)
+        canvas.restore()
     }
 
     private fun drawFlowers(canvas: Canvas, dt: Float) {
@@ -618,74 +740,22 @@ class EffectView(context: Context) : View(context) {
         while (iter.hasNext()) {
             val p = iter.next()
 
-            // --- physics ---
             p.phase += p.swayFreq * dt
-            // sinusoidal sway changes lateral velocity smoothly
             p.vx += (sin(p.phase) * p.swayAmp * p.swayFreq * 2.5f - p.vx * 0.4f) * dt
-            // gentle air drag on downward speed
-            p.y  += (p.vy + cos(p.tilt) * p.vy * 0.12f) * dt
-            p.x  += p.vx * dt
+            p.y += (p.vy + cos(p.tilt) * p.vy * 0.12f) * dt
+            p.x += p.vx * dt
             p.tilt += p.tiltSpd * dt
             p.spin += p.spinSpd * dt
 
-            // wrap X (petals drift off screen, respawn on other side)
-            if (p.x < -p.w * 3f)  p.x = width  + p.w * 2f
-            if (p.x > width + p.w * 3f) p.x = -p.w * 2f
+            if (p.x < -p.r * 3f) p.x = width + p.r * 2f
+            if (p.x > width + p.r * 3f) p.x = -p.r * 2f
 
-            // remove once fully below screen
-            if (p.y - p.h * 2f > height) {
+            if (p.y - p.r * 2f > height) {
                 iter.remove()
                 continue
             }
 
-            // --- 3-D flip: cos of tilt gives apparent width scale ---
-            val flipScale = cos(p.tilt)
-            val absFlip  = maxOf(0.08f, abs(flipScale))  // never fully flat
-            val facingFront = flipScale >= 0f
-
-            canvas.save()
-            canvas.translate(p.x, p.y)
-            canvas.rotate(p.spin)
-            canvas.scale(p.w * absFlip, p.h)       // non-uniform: width flips, height stable
-
-            // --- back face (shown when flipped, slightly darker) ---
-            if (!facingFront) {
-                petalFillP.color = p.darkColor
-                petalFillP.alpha = (p.alpha * 0.80f).toInt()
-                canvas.drawPath(petalPath, petalFillP)
-            } else {
-                // --- front face ---
-                petalFillP.color = p.baseColor
-                petalFillP.alpha = p.alpha
-                canvas.drawPath(petalPath, petalFillP)
-
-                // right-half shadow for petal curl / depth
-                petalShadeP.color = p.darkColor
-                petalShadeP.alpha = (p.alpha * 0.28f).toInt()
-                canvas.drawPath(petalRight, petalShadeP)
-
-                // central vein  (midrib from tip to base)
-                Color.colorToHSV(p.darkColor, hsv)
-                hsv[2] = (hsv[2] * 0.75f).coerceAtLeast(0.03f)
-                petalVeinP.color = Color.HSVToColor(hsv)
-                petalVeinP.alpha = (p.alpha * 0.55f).toInt()
-                petalVeinP.strokeWidth = 0.055f   // in petal-local units
-                canvas.drawLine(0f, -0.82f, 0f, 0.78f, petalVeinP)
-
-                // two side veins
-                petalVeinP.alpha = (p.alpha * 0.30f).toInt()
-                petalVeinP.strokeWidth = 0.035f
-                canvas.drawLine(0f, -0.35f,  0.38f, 0.25f, petalVeinP)
-                canvas.drawLine(0f, -0.35f, -0.38f, 0.25f, petalVeinP)
-                canvas.drawLine(0f,  0.15f,  0.28f, 0.65f, petalVeinP)
-                canvas.drawLine(0f,  0.15f, -0.28f, 0.65f, petalVeinP)
-
-                // small specular glint near tip
-                petalSpecP.alpha = (p.alpha * 0.55f).toInt()
-                canvas.drawCircle(-0.22f, -0.60f, 0.10f, petalSpecP)
-            }
-
-            canvas.restore()
+            if (p.kind == 3) drawLoosePetal(canvas, p) else drawBlossom(canvas, p)
         }
     }
 
@@ -1104,5 +1174,422 @@ class EffectView(context: Context) : View(context) {
             drawHeartShape(canvas, h, x, y, a)
         }
         glowP.shader = null
+    }
+
+    // =====================================================================
+    //  RAIN – slanted streaks in 2 depth layers, gusting wind, and little
+    //  splash rings with droplets where the near drops hit the bottom.
+    // =====================================================================
+    private class Streak(var x: Float, var y: Float, var len: Float, var spd: Float, var w: Float, var a: Int, var ci: Int)
+    private class Splash(val x: Float, val y: Float, var age: Float, val life: Float, val r: Float, val a: Int, val ci: Int)
+
+    private val streaks = ArrayList<Streak>()
+    private val splashes = ArrayList<Splash>()
+    private var rainFilled = false
+    private val rainNat = 0xFFA9CCEE.toInt()
+    private val rainRect = RectF()
+    private val rainP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val rainFillP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+    private fun resetStreak(s: Streak, initial: Boolean) {
+        val span = (height - topLimit).coerceAtLeast(1f)
+        val depth = rnd.nextFloat()
+        s.len = (10f + 26f * depth) * d
+        s.spd = (520f + 380f * depth) * d
+        s.w = (0.7f + 1.1f * depth) * d
+        s.a = 60 + (120 * depth).toInt()
+        s.ci = rnd.nextInt(1000)
+        s.y = if (initial) topLimit + rnd.nextFloat() * span
+        else topLimit - s.len - rnd.nextFloat() * 60f * d
+        s.x = rnd.nextFloat() * (width + span * 0.25f) - span * 0.25f
+    }
+
+    private fun addSplash(x: Float, a: Int, ci: Int) {
+        if (splashes.size >= 60) return
+        splashes.add(
+            Splash(
+                x, height - (1f + rnd.nextFloat() * 5f) * d, 0f,
+                0.35f + rnd.nextFloat() * 0.2f, (5f + rnd.nextFloat() * 6f) * d, a, ci
+            )
+        )
+    }
+
+    private fun drawRain(canvas: Canvas, dt: Float) {
+        clock += dt
+        val target = base * 3
+        while (streaks.size < target) {
+            val s = Streak(0f, 0f, 0f, 0f, 0f, 0, 0)
+            resetStreak(s, !rainFilled)
+            streaks.add(s)
+        }
+        while (streaks.size > target) streaks.removeAt(streaks.size - 1)
+        rainFilled = true
+
+        val ang = 0.2f + sin(clock * 0.4f) * 0.07f      // wind gusts
+        val ux = sin(ang)
+        val uy = cos(ang)
+        val cols = palette()
+
+        for (s in streaks) {
+            s.x += ux * s.spd * dt
+            s.y += uy * s.spd * dt
+            if (s.y >= height - 2f * d) {
+                if (s.a > 110 && rnd.nextFloat() < 0.6f) addSplash(s.x, s.a, s.ci)
+                resetStreak(s, false)
+                continue
+            }
+            rainP.color = if (natural) rainNat else cols[s.ci % cols.size]
+            rainP.alpha = s.a
+            rainP.strokeWidth = s.w
+            canvas.drawLine(s.x, s.y, s.x - ux * s.len, s.y - uy * s.len, rainP)
+        }
+
+        val iter = splashes.iterator()
+        while (iter.hasNext()) {
+            val sp = iter.next()
+            sp.age += dt
+            val t = sp.age / sp.life
+            if (t >= 1f) { iter.remove(); continue }
+            val col = if (natural) rainNat else cols[sp.ci % cols.size]
+            val rx = sp.r * (0.25f + 0.85f * t)
+            val ry = rx * 0.35f
+            rainP.color = col
+            rainP.strokeWidth = 1.1f * d
+            rainP.alpha = (sp.a * 0.8f * (1f - t)).toInt().coerceIn(0, 255)
+            rainRect.set(sp.x - rx, sp.y - ry, sp.x + rx, sp.y + ry)
+            canvas.drawOval(rainRect, rainP)
+
+            rainFillP.color = col
+            rainFillP.alpha = (sp.a * (1f - t)).toInt().coerceIn(0, 255)
+            val up = sin(t * 3.1416f) * sp.r * 0.9f
+            canvas.drawCircle(sp.x - sp.r * 0.9f * t, sp.y - up, 0.9f * d, rainFillP)
+            canvas.drawCircle(sp.x + sp.r * 1.1f * t, sp.y - up * 0.8f, 0.8f * d, rainFillP)
+            canvas.drawCircle(sp.x + sp.r * 0.2f * t, sp.y - up * 1.2f, 0.7f * d, rainFillP)
+        }
+    }
+
+    // =====================================================================
+    //  FIREFLIES – soft yellow-green lights that wander slowly and blink
+    //  (additive glow + bright core).
+    // =====================================================================
+    private class Fly(
+        var x: Float, var y: Float, var ang: Float, val spd: Float, var turn: Float,
+        val phase: Float, val freq: Float, val gr: Float, val col: Int, var boost: Float
+    )
+
+    private val flies = ArrayList<Fly>()
+    private val flyCols = intArrayOf(0xFFCDFF4D.toInt(), 0xFFE6FF70.toInt(), 0xFFFFE45C.toInt(), 0xFFB6F542.toInt())
+    private val flyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
+    }
+
+    private fun newFly(): Fly {
+        val span = (height - topLimit).coerceAtLeast(1f)
+        val pal = palette()
+        return Fly(
+            x = rnd.nextFloat() * width,
+            y = topLimit + rnd.nextFloat() * span,
+            ang = rnd.nextFloat() * 6.28f,
+            spd = (8f + rnd.nextFloat() * 18f) * d,
+            turn = 0f,
+            phase = rnd.nextFloat() * 6.28f,
+            freq = 1.2f + rnd.nextFloat() * 2.2f,
+            gr = (10f + rnd.nextFloat() * 12f) * d,
+            col = if (natural) flyCols[rnd.nextInt(flyCols.size)] else pal[rnd.nextInt(pal.size)],
+            boost = 0f
+        )
+    }
+
+    private fun drawFireflies(canvas: Canvas, dt: Float) {
+        clock += dt
+        val target = maxOf(8, base / 3)
+        while (flies.size < target) flies.add(newFly())
+        while (flies.size > target) flies.removeAt(flies.size - 1)
+
+        for (f in flies) {
+            f.turn += (rnd.nextFloat() - 0.5f) * 9f * dt
+            f.turn -= f.turn * 1.2f * dt
+            f.ang += f.turn * dt
+            f.x += cos(f.ang) * f.spd * dt
+            f.y += sin(f.ang) * f.spd * dt + sin(clock * 1.3f + f.phase) * 7f * d * dt
+            val m = f.gr
+            if (f.x < -m) f.x = width + m else if (f.x > width + m) f.x = -m
+            if (f.y < topLimit - m) f.y = height + m else if (f.y > height + m) f.y = topLimit - m
+            f.boost = maxOf(0f, f.boost - dt * 0.8f)
+
+            val sn = sin(clock * f.freq + f.phase)
+            val b = minOf(1f, (if (sn > 0f) sn * sn * sn else 0.04f) + f.boost)
+            if (b < 0.03f) continue
+
+            flyPaint.shader = soft(quant(f.col))
+            flyPaint.alpha = (b * 230f).toInt().coerceIn(0, 255)
+            canvas.save()
+            canvas.translate(f.x, f.y)
+            canvas.scale(f.gr, f.gr)
+            canvas.drawCircle(0f, 0f, 1f, flyPaint)
+            canvas.restore()
+
+            flyPaint.shader = null
+            flyPaint.color = mixRgb(f.col, Color.WHITE, 0.75f)
+            flyPaint.alpha = (b * 255f).toInt().coerceIn(0, 255)
+            canvas.drawCircle(f.x, f.y, 1.7f * d, flyPaint)
+        }
+        flyPaint.shader = null
+    }
+
+    // =====================================================================
+    //  BUBBLES – soap bubbles: transparent body, iridescent rim, window
+    //  reflections; they wobble, drift up and pop at random heights.
+    // =====================================================================
+    private class Bubble(
+        val x0: Float, var y: Float, val r: Float, val vy: Float,
+        val phase: Float, val freq: Float, val sway: Float,
+        val popY: Float, var popT: Float, val rot: Float, val col: Int, val a: Float, var age: Float
+    )
+
+    private val bubbles = ArrayList<Bubble>()
+    private var bubblesFilled = false
+    private var bubbleAcc = 0f
+    private val bubbleRect = RectF(-0.7f, -0.7f, 0.7f, 0.7f)
+
+    private val bubbleBody = RadialGradient(
+        0f, 0f, 1f,
+        intArrayOf(0x00FFFFFF, 0x18FFFFFF, 0x66FFFFFF),
+        floatArrayOf(0f, 0.78f, 1f), Shader.TileMode.CLAMP
+    )
+    private val bubbleRim = SweepGradient(
+        0f, 0f,
+        intArrayOf(
+            0xAAFF6EC7.toInt(), 0xAA7CC8FF.toInt(), 0xAA7CFFB2.toInt(),
+            0xAAFFE066.toInt(), 0xAAFF6EC7.toInt()
+        ),
+        null
+    )
+    private val bubbleBodyP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val bubbleRimP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 0.07f
+    }
+    private val bubbleHiP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 0.07f
+        strokeCap = Paint.Cap.ROUND
+        color = Color.WHITE
+    }
+
+    private fun newBubble(prefill: Boolean): Bubble {
+        val span = (height - topLimit).coerceAtLeast(1f)
+        val r = (8f + rnd.nextFloat() * 16f) * d
+        val y = if (prefill) topLimit + span * (0.2f + rnd.nextFloat() * 0.8f) else height + r
+        val pal = palette()
+        return Bubble(
+            x0 = r + rnd.nextFloat() * (width - r * 2f).coerceAtLeast(1f),
+            y = y, r = r,
+            vy = (18f + rnd.nextFloat() * 26f) * d,
+            phase = rnd.nextFloat() * 6.28f,
+            freq = 0.7f + rnd.nextFloat() * 0.9f,
+            sway = (6f + rnd.nextFloat() * 14f) * d,
+            popY = topLimit + (y - topLimit) * (0.05f + rnd.nextFloat() * 0.70f),
+            popT = -1f,
+            rot = rnd.nextFloat() * 360f,
+            col = pal[rnd.nextInt(pal.size)] or (0xFF shl 24),
+            a = 0.75f + rnd.nextFloat() * 0.25f,
+            age = 0f
+        )
+    }
+
+    private fun drawBubbles(canvas: Canvas, dt: Float) {
+        if (!bubblesFilled) {
+            repeat(maxOf(5, base / 4)) { bubbles.add(newBubble(true)) }
+            bubblesFilled = true
+        }
+        bubbleAcc += dt * base * 0.12f
+        while (bubbleAcc >= 1f) {
+            bubbleAcc -= 1f
+            if (bubbles.size < base * 3 / 2) bubbles.add(newBubble(false))
+        }
+
+        val iter = bubbles.iterator()
+        while (iter.hasNext()) {
+            val b = iter.next()
+            b.age += dt
+            b.y -= b.vy * dt
+            if (b.popT < 0f && b.y < b.popY) b.popT = 0f
+            if (b.popT >= 0f) {
+                b.popT += dt / 0.18f
+                if (b.popT >= 1f) { iter.remove(); continue }
+            }
+            if (b.y + b.r < topLimit) { iter.remove(); continue }
+
+            val x = b.x0 + sin(b.phase + b.age * b.freq) * b.sway
+            val popping = b.popT >= 0f
+            val pop = if (popping) 1f + 0.25f * b.popT else 1f
+            val a = b.a * (if (popping) 1f - b.popT else minOf(1f, b.age / 0.3f))
+            val w = sin(b.age * 3f + b.phase) * 0.05f
+
+            canvas.save()
+            canvas.translate(x, b.y)
+            canvas.scale(b.r * pop * (1f + w), b.r * pop * (1f - w))
+
+            bubbleBodyP.shader = bubbleBody
+            bubbleBodyP.alpha = (a * 255f).toInt().coerceIn(0, 255)
+            canvas.drawCircle(0f, 0f, 1f, bubbleBodyP)
+
+            canvas.save()
+            canvas.rotate(b.rot)
+            if (natural) {
+                bubbleRimP.shader = bubbleRim
+                bubbleRimP.alpha = (a * 255f).toInt().coerceIn(0, 255)
+            } else {
+                bubbleRimP.shader = null
+                bubbleRimP.color = b.col
+                bubbleRimP.alpha = (a * 200f).toInt().coerceIn(0, 255)
+            }
+            canvas.drawCircle(0f, 0f, 0.95f, bubbleRimP)
+            canvas.restore()
+
+            bubbleHiP.alpha = (a * 230f).toInt().coerceIn(0, 255)
+            canvas.drawArc(bubbleRect, 200f, 55f, false, bubbleHiP)
+            bubbleHiP.alpha = (a * 90f).toInt().coerceIn(0, 255)
+            canvas.drawArc(bubbleRect, 20f, 40f, false, bubbleHiP)
+            canvas.restore()
+        }
+        bubbleBodyP.shader = null
+        bubbleRimP.shader = null
+    }
+
+    // =====================================================================
+    //  STARS – twinkling stars (big ones get a 4-point sparkle) and an
+    //  occasional shooting star with a fading tail.
+    // =====================================================================
+    private class Star(
+        val fx: Float, val fy: Float, val r: Float,
+        val phase: Float, val freq: Float, val col: Int, var flash: Float
+    )
+
+    private class Shoot(
+        var x: Float, var y: Float, val ux: Float, val uy: Float,
+        val spd: Float, var age: Float, val life: Float
+    )
+
+    private val stars = ArrayList<Star>()
+    private val shoots = ArrayList<Shoot>()
+    private var starsFilled = false
+    private var shootIn = 3f
+    private val starCols = intArrayOf(
+        0xFFFFFFFF.toInt(), 0xFFFFF4C2.toInt(), 0xFFCFE4FF.toInt(), 0xFFFFE0B0.toInt()
+    )
+    private val starPath = Path().apply {
+        moveTo(0f, -1f)
+        quadTo(0f, 0f, 1f, 0f)
+        quadTo(0f, 0f, 0f, 1f)
+        quadTo(0f, 0f, -1f, 0f)
+        quadTo(0f, 0f, 0f, -1f)
+        close()
+    }
+    private val starP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+    private fun newStar(): Star {
+        val pal = palette()
+        return Star(
+            fx = rnd.nextFloat(), fy = rnd.nextFloat(),
+            r = (0.8f + rnd.nextFloat() * rnd.nextFloat() * 2.6f) * d,
+            phase = rnd.nextFloat() * 6.28f,
+            freq = 0.8f + rnd.nextFloat() * 2.4f,
+            col = (if (natural) starCols[rnd.nextInt(starCols.size)] else pal[rnd.nextInt(pal.size)]) or (0xFF shl 24),
+            flash = 0f
+        )
+    }
+
+    private fun drawStars(canvas: Canvas, dt: Float) {
+        clock += dt
+        val span = (height - topLimit).coerceAtLeast(1f)
+        if (!starsFilled) {
+            repeat(maxOf(24, (base * 1.1f).toInt())) { stars.add(newStar()) }
+            starsFilled = true
+        }
+
+        for (s in stars) {
+            s.flash = maxOf(0f, s.flash - dt * 1.4f)
+            val tw = 0.5f + 0.5f * sin(clock * s.freq + s.phase)
+            val b = minOf(1f, 0.30f + 0.70f * tw + s.flash)
+            val x = s.fx * width
+            val y = topLimit + s.fy * span
+            val big = s.r > 1.9f * d
+
+            // soft glow
+            val gr = s.r * (if (big) 3.2f else 2.4f)
+            starP.shader = soft(quant(s.col))
+            starP.alpha = ((if (big) 0.35f else 0.55f) * b * 255f).toInt().coerceIn(0, 255)
+            canvas.save()
+            canvas.translate(x, y)
+            canvas.scale(gr, gr)
+            canvas.drawCircle(0f, 0f, 1f, starP)
+            canvas.restore()
+            starP.shader = null
+
+            starP.color = s.col
+            if (big || s.flash > 0.1f) {
+                val sc = s.r * (1.5f + s.flash * 0.8f)
+                starP.alpha = (b * 255f).toInt().coerceIn(0, 255)
+                canvas.save()
+                canvas.translate(x, y)
+                canvas.scale(sc, sc)
+                canvas.drawPath(starPath, starP)
+                canvas.rotate(45f)
+                canvas.scale(0.55f, 0.55f)
+                starP.alpha = (b * 150f).toInt().coerceIn(0, 255)
+                canvas.drawPath(starPath, starP)
+                canvas.restore()
+            } else {
+                starP.alpha = (b * 255f).toInt().coerceIn(0, 255)
+                canvas.drawCircle(x, y, s.r * 0.6f, starP)
+            }
+        }
+
+        // shooting stars
+        shootIn -= dt
+        if (shootIn <= 0f) {
+            shootIn = 2.5f + rnd.nextFloat() * 3.5f
+            if (shoots.size < 2) {
+                val dir = if (rnd.nextBoolean()) 1f else -1f
+                val a = 0.45f + rnd.nextFloat() * 0.35f
+                shoots.add(
+                    Shoot(
+                        x = if (dir > 0f) rnd.nextFloat() * width * 0.5f else width - rnd.nextFloat() * width * 0.5f,
+                        y = topLimit + rnd.nextFloat() * span * 0.35f,
+                        ux = dir * cos(a), uy = sin(a),
+                        spd = (380f + rnd.nextFloat() * 180f) * d,
+                        age = 0f, life = 0.7f + rnd.nextFloat() * 0.4f
+                    )
+                )
+            }
+        }
+        val iter = shoots.iterator()
+        while (iter.hasNext()) {
+            val sh = iter.next()
+            sh.age += dt
+            val t = sh.age / sh.life
+            if (t >= 1f) { iter.remove(); continue }
+            sh.x += sh.ux * sh.spd * dt
+            sh.y += sh.uy * sh.spd * dt
+            val fade = minOf(1f, t / 0.12f, (1f - t) / 0.35f).coerceIn(0f, 1f)
+            starP.shader = soft(0xE8F1FF)
+            for (i in 0 until 14) {
+                val k = 1f - i / 14f
+                val rad = maxOf(0.6f, 2.6f - i * 0.14f) * d * 2.2f
+                starP.alpha = (k * fade * 230f).toInt().coerceIn(0, 255)
+                canvas.save()
+                canvas.translate(sh.x - sh.ux * i * 7f * d, sh.y - sh.uy * i * 7f * d)
+                canvas.scale(rad, rad)
+                canvas.drawCircle(0f, 0f, 1f, starP)
+                canvas.restore()
+            }
+            starP.shader = null
+        }
     }
 }

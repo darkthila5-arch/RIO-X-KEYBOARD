@@ -121,7 +121,7 @@ class RioBoardService : InputMethodService() {
     private var snowMode = 2          // 0 off, 1 keyboard area, 2 full screen
     private var lastSnow = 2
     private var snowColorIdx = 0
-    private var effectIdx = 0         // 0 snow, 1 water drops, 2 leaves, 3 flowers, 4 smoke, 5 fire, 6 hearts
+    private var effectIdx = 0         // 0 snow, 1 drops, 2 leaves, 3 flowers, 4 smoke, 5 fire, 6 hearts, 7 rain, 8 fireflies, 9 bubbles, 10 stars
     private var haptic = true
     private val boomCounts = intArrayOf(5, 10, 20, 50)
     private val boomDelays = longArrayOf(300L, 600L, 1000L)
@@ -1113,10 +1113,19 @@ class RioBoardService : InputMethodService() {
             prefs.edit().putInt("effect", effectIdx).apply()
             if (snowMode == 0) setSnow(lastSnow) else { applySnow(); render() }
         }
-        box.addView(chipRow(listOf("Snow ❄", "Water drops 💧", "Leaves 🍃", "Flowers 🌸"),
-            if (effectIdx < 4) effectIdx else -1) { pickEffect(it) })
-        box.addView(chipRow(listOf("Smoke 💨", "Fire 🔥", "Hearts ❤"),
-            if (effectIdx >= 4) effectIdx - 4 else -1) { pickEffect(it + 4) })
+        val effRows = listOf(
+            listOf("Snow ❄", "Water drops 💧", "Leaves 🍃", "Flowers 🌸"),
+            listOf("Smoke 💨", "Fire 🔥", "Hearts ❤"),
+            listOf("Rain 🌧", "Fireflies ✨", "Bubbles ○", "Stars ⭐")
+        )
+        var effOff = 0
+        for (row in effRows) {
+            val o = effOff
+            box.addView(chipRow(row, if (effectIdx >= o && effectIdx < o + row.size) effectIdx - o else -1) {
+                pickEffect(it + o)
+            })
+            effOff += row.size
+        }
         box.addView(settingLabel("Effect area"))
         box.addView(chipRow(listOf("Off", "Keyboard", "Full screen"), snowMode) { setSnow(it) })
         box.addView(settingLabel("Effect colour (auto = natural look)"))
