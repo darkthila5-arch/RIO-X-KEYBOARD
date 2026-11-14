@@ -12,7 +12,7 @@ import android.view.View
 /** Simple line icons drawn in code (no image files needed). */
 class IconView(context: Context, private val kind: Kind) : View(context) {
 
-    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN, STICKER, CLOSE }
+    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN, STICKER, CLOSE, LOCK }
 
     var tint: Int = Color.WHITE
         set(value) {
@@ -205,6 +205,17 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
                 path.lineTo(12f, 15.2f)
                 path.lineTo(15.5f, 11.5f)
                 c.drawPath(path, p)
+            }
+            Kind.LOCK -> {
+                c.drawRoundRect(RectF(5.5f, 11f, 18.5f, 20.5f), 2.5f, 2.5f, p)
+                path.reset()
+                path.moveTo(8.5f, 11f)
+                path.lineTo(8.5f, 8.5f)
+                path.arcTo(RectF(8.5f, 4.5f, 15.5f, 12.5f), 180f, 180f)
+                path.lineTo(15.5f, 11f)
+                c.drawPath(path, p)
+                c.drawCircle(12f, 15.2f, 1.2f, fill)
+                c.drawLine(12f, 15.8f, 12f, 17.8f, p)
             }
             Kind.CLOSE -> {
                 c.drawLine(6f, 6f, 18f, 18f, p)

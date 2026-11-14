@@ -44,7 +44,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO }
 
     private class Key(
         val label: String,
@@ -169,6 +169,10 @@ class RioBoardService : InputMethodService() {
     private var bgOn = false
     private var bgBitmap: Bitmap? = null
     private var pendingVoice: String? = null
+    private var passwordField = false
+    private var pendingInsert: String? = null
+    private var pendingInsertAt = 0L
+    private var pendingReplaceAll = false
     private var pendingVoiceAt = 0L
 
     private val keyHs = intArrayOf(44, 50, 56)
@@ -287,8 +291,23 @@ class RioBoardService : InputMethodService() {
         sbuf.clear()
         snips = Snips.load(prefs)
         loadRioStyles()
+        val it0 = info?.inputType ?: 0
+        val cls = it0 and android.text.InputType.TYPE_MASK_CLASS
+        val variation = it0 and android.text.InputType.TYPE_MASK_VARIATION
+        passwordField = (cls == android.text.InputType.TYPE_CLASS_TEXT && (
+            variation == android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                variation == android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+                variation == android.text.InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)) ||
+            (cls == android.text.InputType.TYPE_CLASS_NUMBER &&
+                variation == android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD)
+        if (passwordField) {
+            // passwords are typed exactly as pressed: no Singlish, no styles, no suggestions, no learning
+            siMode = false
+            sbuf.clear()
+        }
         captureClip()
         flushPendingVoice()
+        flushPendingInsert()
         suggestions = computeSuggestions()
         render()
         applySnow()
@@ -403,6 +422,7 @@ class RioBoardService : InputMethodService() {
             Panel.STATUS -> renderStatus()
             Panel.MAKER -> renderMaker()
             Panel.TOOLS -> renderTools()
+            Panel.CRYPTO -> renderCrypto()
             Panel.NONE -> {
                 root.addView(row(chars("1234567890")))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -453,6 +473,7 @@ class RioBoardService : InputMethodService() {
             ic("snips", "Shortcuts", 1, IconView.Kind.BOLT, { panel == Panel.SNIPS }) { togglePanel(Panel.SNIPS) },
             tx("case", "Change case", 1, "a⇄A", 13f) { changeCase() },
             ic("date", "Date & time", 1, IconView.Kind.CALENDAR) { insertDateTime() },
+            ic("lock", "Secret message", 1, IconView.Kind.LOCK, { panel == Panel.CRYPTO }) { togglePanel(Panel.CRYPTO) },
             // 2 edit
             ic("selall", "Select all", 2, IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) },
             ic("copy", "Copy", 2, IconView.Kind.COPY) { menuAction(android.R.id.copy) },
@@ -1773,7 +1794,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun computeSuggestions(): List<String> {
-        if (fontStyle != 0) return emptyList()
+        if (fontStyle != 0 || passwordField) return emptyList()
         val prefix = currentPrefix()
         if (prefix.isEmpty()) return emptyList()
         val lower = prefix.lowercase()
@@ -1814,6 +1835,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun learn(word: String) {
+        if (passwordField) return
         val k = word.lowercase().trim()
         if (k.length < 2) return
         learned[k] = (learned[k] ?: 0) + 1
@@ -1828,6 +1850,7 @@ class RioBoardService : InputMethodService() {
         try {
             val clip = cm.primaryClip ?: return
             if (clip.itemCount == 0) return
+            if (clip.description?.extras?.getBoolean("android.content.extra.IS_SENSITIVE") == true) return
             val text = clip.getItemAt(0).coerceToText(this)?.toString() ?: return
             if (text.isBlank()) return
             if (clips.isNotEmpty() && clips[0] == text) return
@@ -2038,8 +2061,8 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun typeLetter(label: String) {
-        if (sbuf.isEmpty()) decorateWordStart(label)
-        if (singlishOn) {
+        if (sbuf.isEmpty() && !passwordField) decorateWordStart(label)
+        if (singlishOn && !passwordField) {
             toolsPinned = false
             sbuf.append(label)
             lastComposeMs = SystemClock.uptimeMillis()
@@ -2058,7 +2081,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun styled(s: String): String =
-        if (fontStyle == 0 || singlishOn || s.length != 1) s else Fonts.convert(s[0], fontStyle)
+        if (fontStyle == 0 || singlishOn || passwordField || s.length != 1) s else Fonts.convert(s[0], fontStyle)
 
     private fun spaceLabel(): String = "RIO BOARD"
 
@@ -2436,6 +2459,127 @@ class RioBoardService : InputMethodService() {
         pendingVoice = text
         pendingVoiceAt = SystemClock.uptimeMillis()
         handler.postDelayed({ flushPendingVoice() }, 400)
+    }
+
+    /** Called by CryptoActivity: the locked text goes into the chat box when the keyboard comes back. */
+    fun cryptoInsert(text: String, replaceAll: Boolean) {
+        pendingInsert = text
+        pendingReplaceAll = replaceAll
+        pendingInsertAt = SystemClock.uptimeMillis()
+    }
+
+    private fun flushPendingInsert() {
+        val t = pendingInsert ?: return
+        if (SystemClock.uptimeMillis() - pendingInsertAt > 30000) {
+            pendingInsert = null
+            return
+        }
+        val ic = currentInputConnection ?: return
+        pendingInsert = null
+        ic.beginBatchEdit()
+        if (pendingReplaceAll) {
+            val before = ic.getTextBeforeCursor(100000, 0)?.length ?: 0
+            val after = ic.getTextAfterCursor(100000, 0)?.length ?: 0
+            ic.deleteSurroundingText(before, after)
+        }
+        ic.commitText(t, 1)
+        ic.endBatchEdit()
+    }
+
+    private fun clipText(): String = try {
+        cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString() ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    private fun selectedText(): String = currentInputConnection?.getSelectedText(0)?.toString() ?: ""
+
+    private fun openCrypto(encrypt: Boolean) {
+        flushSinglish()
+        var text = ""
+        var whole = false
+        if (encrypt) {
+            text = selectedText()
+            if (text.isEmpty()) {
+                // nothing selected: lock everything that was typed in the chat box
+                val ic = currentInputConnection
+                val before = ic?.getTextBeforeCursor(100000, 0)?.toString() ?: ""
+                val after = ic?.getTextAfterCursor(100000, 0)?.toString() ?: ""
+                text = before + after
+                whole = text.isNotEmpty()
+            }
+        } else {
+            val sel = selectedText()
+            text = if (RioCrypto.findToken(sel) != null) sel else clipText()
+        }
+        try {
+            startActivity(
+                Intent(this, CryptoActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra("mode", if (encrypt) "enc" else "dec")
+                    .putExtra("text", text)
+                    .putExtra("whole", whole)
+            )
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun renderCrypto() {
+        root.addView(panelHeader("Secret messages"))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(6), dp(10), dp(10))
+        }
+        val sel = selectedText()
+        val hasLocked = RioCrypto.findToken(clipText()) != null || RioCrypto.findToken(sel) != null
+
+        fun card(title: String, sub: String, highlight: Boolean, onClick: () -> Unit): View {
+            val c = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = roundBg(if (highlight) th.accent else th.key, 14)
+                setPadding(dp(16), dp(12), dp(16), dp(12))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(dp(2), dp(5), dp(2), dp(5)) }
+                isClickable = true
+                setOnClickListener {
+                    feedback(it)
+                    onClick()
+                }
+            }
+            c.addView(TextView(this).apply {
+                text = title
+                setTextColor(if (highlight) Color.WHITE else th.text)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            c.addView(TextView(this).apply {
+                text = sub
+                setTextColor(if (highlight) Color.WHITE else th.hint)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setPadding(0, dp(3), 0, 0)
+            })
+            return c
+        }
+
+        box.addView(
+            card(
+                "🔒 Lock message",
+                if (sel.isNotEmpty()) "The selected text will be locked with a password."
+                else "Type your message in the chat box (or select part of it), then tap here.",
+                false
+            ) { openCrypto(true) }
+        )
+        box.addView(
+            card(
+                "🔓 Unlock message",
+                if (hasLocked) "✓ A locked message is ready. Tap to read it with the password."
+                else "Copy the locked message you received (long-press it → Copy), then tap here.",
+                hasLocked
+            ) { openCrypto(false) }
+        )
+        box.addView(hintText("Locked text starts with 🔒RIO: and only opens with the password. The person you send it to needs the RIO BOARD keyboard."))
+        root.addView(panelBody(box))
     }
 
     private fun flushPendingVoice() {

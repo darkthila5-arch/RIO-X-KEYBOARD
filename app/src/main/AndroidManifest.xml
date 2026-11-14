@@ -43,6 +43,14 @@
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
 
+        <!-- lock / unlock secret messages, opened from the keyboard -->
+        <activity
+            android:name=".CryptoActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- sticker / GIF studio, opened from the keyboard -->
         <activity
             android:name=".MakerActivity"
