@@ -2865,7 +2865,9 @@ class RioBoardService : InputMethodService() {
             val n = if (before.length >= 2 &&
                 Character.isLowSurrogate(before[before.length - 1]) &&
                 Character.isHighSurrogate(before[before.length - 2])
-            ) 2 else 1
+            ) 2
+            else if (before.length >= 2 && before[before.length - 1] in '\u0300'..'\u036F') 2  // letter + combining mark (strikethrough, underline ...)
+            else 1
             ic.deleteSurroundingText(n, 0)
         }
     }
