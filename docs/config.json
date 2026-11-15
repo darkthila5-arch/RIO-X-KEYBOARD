@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-11-15T00:00:00.000Z",
+  "updated": "2026-11-15T11:57:01.622Z",
   "themes": [
     {
       "id": "sakura",
@@ -28,6 +28,18 @@
       "enabled": true
     }
   ],
-  "hidden": { "themes": [], "backgrounds": [], "videos": [] },
-  "backgrounds": []
+  "hidden": {
+    "themes": [],
+    "backgrounds": [],
+    "videos": []
+  },
+  "backgrounds": [
+    {
+      "id": "nature-is-so-beautiful-1-4mj7",
+      "name": "nature is so beautiful ___ (1)",
+      "file": "bg/nature-is-so-beautiful-1-4mj7.jpg",
+      "thumb": "bg/nature-is-so-beautiful-1-4mj7_t.jpg",
+      "enabled": true
+    }
+  ]
 }
