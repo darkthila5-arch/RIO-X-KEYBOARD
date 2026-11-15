@@ -294,6 +294,7 @@ class RioBoardService : InputMethodService() {
         heightPct = prefs.getInt("heightpct", 100).coerceIn(70, 140)
         layoutKind = prefs.getInt("langlayout", 0).coerceIn(0, 2)
         soundLevel = prefs.getInt("sound", 0).coerceIn(0, 3)
+        IconView.neo = prefs.getBoolean("neoicons", true)
         autoCap = prefs.getBoolean("autocap", true)
         emojiSug = prefs.getBoolean("emojisug", true)
         snips = Snips.load(prefs)
@@ -786,7 +787,7 @@ class RioBoardService : InputMethodService() {
         }
         val tc = FrameLayout(this)
         tc.background = ovalBg(th.key)
-        val iv = IconView(this, if (editing) IconView.Kind.CLOSE else IconView.Kind.DOWN)
+        val iv = IconView(this, if (editing) IconView.Kind.CLOSE else IconView.Kind.COLLAPSE)
         iv.tint = th.text
         val sz = dp((circle * 0.56f).toInt())
         tc.addView(iv, FrameLayout.LayoutParams(sz, sz, Gravity.CENTER))
@@ -1708,6 +1709,12 @@ class RioBoardService : InputMethodService() {
             nextWordOn = it == 0
             prefs.edit().putBoolean("nextword", nextWordOn).apply()
             suggestions = computeSuggestions()
+            render()
+        })
+        box.addView(settingLabel("Toolbar icon style"))
+        box.addView(chipRow(listOf("Neo (new)", "Classic"), if (IconView.neo) 0 else 1) {
+            IconView.neo = it == 0
+            prefs.edit().putBoolean("neoicons", IconView.neo).apply()
             render()
         })
         box.addView(settingLabel("Key sound (also needs touch sounds on in phone settings)"))

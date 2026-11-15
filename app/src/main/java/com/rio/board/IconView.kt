@@ -12,7 +12,13 @@ import android.view.View
 /** Simple line icons drawn in code (no image files needed). */
 class IconView(context: Context, private val kind: Kind) : View(context) {
 
-    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN, STICKER, CLOSE, LOCK, CALC, KEYSTYLE }
+    enum class Kind { CLIPBOARD, HISTORY, SELECT_ALL, COPY, CUT, SNOW, THEME, SETTINGS, BACK, TRASH, EMOJI, UNDO, REDO, LEFT, RIGHT, GLOBE, GRID, MIC, BOLT, IMAGE, BOMB, STATUS, CALENDAR, HOME, END, UP, DOWN, STICKER, CLOSE, LOCK, CALC, KEYSTYLE, COLLAPSE }
+
+    companion object {
+        /** true = the new vector icon set (NeoIcons) where available, false = the classic line icons */
+        @JvmStatic
+        var neo = true
+    }
 
     var tint: Int = Color.WHITE
         set(value) {
@@ -22,6 +28,7 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val soft = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val path = Path()
 
     override fun onDraw(c: Canvas) {
@@ -38,6 +45,36 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
         p.strokeCap = Paint.Cap.ROUND
         p.strokeJoin = Paint.Join.ROUND
         p.pathEffect = null
+
+        if (neo) {
+            val layers = NeoIcons.layers(kind)
+            if (layers != null) {
+                p.strokeWidth = 1.9f
+                for ((lp, mode) in layers) {
+                    when (mode) {
+                        NeoIcons.SOLID -> c.drawPath(lp, fill)
+                        NeoIcons.SOFT -> {
+                            soft.color = (tint and 0x00FFFFFF) or (0x38 shl 24)
+                            c.drawPath(lp, soft)
+                            c.drawPath(lp, p)
+                        }
+                        NeoIcons.FAINT -> {
+                            p.color = (tint and 0x00FFFFFF) or (0x73 shl 24)
+                            c.drawPath(lp, p)
+                            p.color = tint
+                        }
+                        NeoIcons.DASH -> {
+                            p.pathEffect = DashPathEffect(floatArrayOf(2.6f, 2.4f), 0f)
+                            c.drawPath(lp, p)
+                            p.pathEffect = null
+                        }
+                        else -> c.drawPath(lp, p)
+                    }
+                }
+                c.restore()
+                return
+            }
+        }
 
         when (kind) {
             Kind.CLIPBOARD -> {
@@ -310,6 +347,14 @@ class IconView(context: Context, private val kind: Kind) : View(context) {
                 path.lineTo(12f, 16f)
                 path.lineTo(19f, 9f)
                 c.drawPath(path, p)
+            }
+            Kind.COLLAPSE -> {
+                path.reset()
+                path.moveTo(5.8f, 8.2f)
+                path.lineTo(12f, 14.4f)
+                path.lineTo(18.2f, 8.2f)
+                c.drawPath(path, p)
+                c.drawLine(8.6f, 18.6f, 15.4f, 18.6f, p)
             }
             Kind.TRASH -> {
                 c.drawLine(4f, 7f, 20f, 7f, p)

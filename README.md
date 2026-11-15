@@ -11,3 +11,4 @@ Sinhala + English Android keyboard. Push to GitHub -> Actions builds the APK -> 
 - **Auto-capital**, double-space → ". ", **emoji suggestions**, optional **key sounds**.
 - **Backup / restore** of learned words and shortcuts (Settings → copies to clipboard).
 - **Animated video backgrounds** (8 looping clips: Aurora, Neon waves, Starfield, Lava, Synthwave, Bokeh, Galaxy, Plasma). Pick them in the Backgrounds panel or Settings.
+- **Neo toolbar icons**: new vector icon set (T-shirt theme, winking emoji, sticker, mic, gear ...). Switch back to Classic in Settings.
