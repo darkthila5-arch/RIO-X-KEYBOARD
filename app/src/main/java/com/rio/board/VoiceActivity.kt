@@ -14,7 +14,11 @@ class VoiceActivity : Activity() {
         val sinhala = intent.getBooleanExtra("si", false)
         val i = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
         i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, if (sinhala) "si-LK" else Locale.getDefault().toLanguageTag())
+        val loc = intent.getStringExtra("loc")
+        i.putExtra(
+            RecognizerIntent.EXTRA_LANGUAGE,
+            if (!loc.isNullOrEmpty()) loc else if (sinhala) "si-LK" else Locale.getDefault().toLanguageTag()
+        )
         try {
             startActivityForResult(i, 21)
         } catch (e: Exception) {

@@ -292,7 +292,7 @@ class RioBoardService : InputMethodService() {
         oneHand = prefs.getInt("onehand", 0).coerceIn(0, 2)
         widthPct = prefs.getInt("widthpct", 100).coerceIn(50, 100)
         heightPct = prefs.getInt("heightpct", 100).coerceIn(70, 140)
-        layoutKind = prefs.getInt("langlayout", 0).coerceIn(0, 3)
+        layoutKind = prefs.getInt("langlayout", 0).coerceIn(0, 3 + Languages.extra.size)
         soundLevel = prefs.getInt("sound", 0).coerceIn(0, 3)
         IconView.neo = prefs.getBoolean("neoicons", true)
         autoCap = prefs.getBoolean("autocap", true)
@@ -625,9 +625,7 @@ class RioBoardService : InputMethodService() {
             ic("clip", "Clipboard", 0, IconView.Kind.HISTORY, { panel == Panel.CLIPBOARD }) { togglePanel(Panel.CLIPBOARD) },
             ic("emoji", "Emoji", 0, IconView.Kind.EMOJI, { panel == Panel.EMOJI }) { togglePanel(Panel.EMOJI) },
             ic("sticker", "Stickers & GIFs", 0, IconView.Kind.STICKER, { panel == Panel.MAKER }) { togglePanel(Panel.MAKER) },
-            ic("lang", "Language", 0, IconView.Kind.GLOBE) {
-                flushSinglish(); siMode = !siMode; symbols = false; panel = Panel.NONE; render()
-            },
+            ic("lang", "Language (tap to change)", 0, IconView.Kind.GLOBE) { cycleLanguage() },
             tx("singlish", "Singlish", 0, "A→අ", 13f, { singlishOn }) { setSinglish(!singlishOn) },
             ic("voice", "Voice typing", 0, IconView.Kind.MIC) { startVoice() },
             tx("numrow", "Number row", 0, "123", 13f, { numberRow }) { toggleNumberRow() },
@@ -1738,6 +1736,13 @@ class RioBoardService : InputMethodService() {
         })
         box.addView(settingLabel("Sinhala / Tamil layout"))
         box.addView(chipRow(listOf("Sinhala", "Wijesekara", "Tamil", "Easy"), layoutKind) { setLayout(it) })
+        box.addView(settingLabel("Languages in the \uD83C\uDF10 button (tap to switch on / off)"))
+        Languages.entries.chunked(3).forEach { part ->
+            box.addView(chipRow(part.map { (if (Languages.isOn(prefs, it.id)) "\u2713 " else "") + it.native }, -1) { i ->
+                Languages.toggle(prefs, part[i].id)
+                render()
+            })
+        }
         box.addView(settingLabel("Typing"))
         box.addView(chipRow(listOf("English", "Singlish → සිංහල"), if (singlishOn) 1 else 0) { setSinglish(it == 1) })
         box.addView(settingLabel("Background photo"))
@@ -1883,7 +1888,7 @@ class RioBoardService : InputMethodService() {
                         Key("ABC", 1.5f, Style.SPECIAL, 14f) { flushSinglish(); symbols = false; render() }
                     else
                         Key("?123", 1.5f, Style.SPECIAL, 14f) { flushSinglish(); symbols = true; render() },
-                    Key(if (layoutKind == 2) "த" else "සිං", 1.3f, Style.SPECIAL, 14f, onLong = { setSinglish(!singlishOn) }) {
+                    Key(Languages.keyLabel(layoutKind), 1.3f, Style.SPECIAL, 14f, onLong = { setSinglish(!singlishOn) }) {
                         flushSinglish(); siMode = true; symbols = false; render()
                     },
                     Key(",") { type(",") },
@@ -1900,6 +1905,7 @@ class RioBoardService : InputMethodService() {
             1 -> renderWijesekara()
             2 -> renderTamil()
             3 -> renderEasy()
+            in 4..99 -> renderExtra()
             else -> renderSinhalaGrid()
         }
     }
@@ -2717,20 +2723,74 @@ class RioBoardService : InputMethodService() {
         render()
     }
 
-    private val layoutNames = listOf("Sinhala", "Wijesekara", "Tamil", "Easy Sinhala")
-
     private fun setLayout(kind: Int) {
         flushSinglish()
-        layoutKind = kind.coerceIn(0, 3)
+        layoutKind = kind.coerceIn(0, 3 + Languages.extra.size)
         siLayer = 0
         shift = 0
         prefs.edit().putInt("langlayout", layoutKind).apply()
+        if (layoutKind != 2 && layoutKind < 4) prefs.edit().putInt("silayout", layoutKind).apply()
         render()
     }
 
+    /** Long-press ABC: next layout (Sinhala grid, Wijesekara, Easy, Tamil, Hindi ...). */
     private fun cycleLayout() {
-        setLayout((layoutKind + 1) % 4)
-        toast(layoutNames[layoutKind])
+        val stops = Languages.layoutStops(prefs)
+        setLayout(stops[(stops.indexOf(layoutKind) + 1) % stops.size])
+        toast(Languages.title(layoutKind))
+    }
+
+    // ---------- more languages (data lives in Languages.kt) ----------
+    private fun currentLangId(): String = if (!siMode) "en" else Languages.idForKind(layoutKind)
+
+    /** Language button: English -> Sinhala -> Tamil -> Hindi -> ... -> English. */
+    private fun cycleLanguage() {
+        flushSinglish()
+        val order = Languages.cycle(prefs)
+        setLanguage(order[(order.indexOf(currentLangId()) + 1) % order.size])
+    }
+
+    private fun setLanguage(id: String) {
+        symbols = false
+        panel = Panel.NONE
+        shift = 0
+        if (id == "en") {
+            siMode = false
+            render()
+            toast(if (singlishOn) "Singlish" else "English")
+        } else {
+            siMode = true
+            setLayout(Languages.kindFor(id, prefs.getInt("silayout", 0)))
+            toast(Languages.title(layoutKind))
+        }
+    }
+
+    /** Draws Hindi, Telugu, Malayalam, Kannada, Bengali, Arabic from the layers in Languages.kt. */
+    private fun renderExtra() {
+        val lang = Languages.extra.getOrNull(layoutKind - 4)
+        if (lang == null) {
+            renderSinhalaGrid()
+            return
+        }
+        val n = lang.layers.size
+        val li = siLayer % n
+        val layer = lang.layers[li]
+        layer.rows.forEachIndexed { r, keys ->
+            root.addView(row(keys.mapIndexed { c, s ->
+                val combos = if (layer.popups && popupsOn) lang.signs.map { s + it } else emptyList()
+                Key(Languages.label(s), textSp = 22f, alts = digitAlt(r, c) + combos) {
+                    decorateWordStart(s)
+                    type(s)
+                }
+            }, pad = (10 - keys.size) / 2f))
+        }
+        repeat(3 - layer.rows.size) {
+            root.addView(View(this).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
+            })
+        }
+        val nextLabel = lang.layers[(li + 1) % n].label
+        root.addView(indicBottomRow(Key(nextLabel, 1.3f, Style.ACTIVE, 20f) { siLayer = (li + 1) % n; render() }))
     }
 
     private fun deleteWord() {
@@ -2820,7 +2880,8 @@ class RioBoardService : InputMethodService() {
 
     // ---------- word suggestions ----------
     private fun isWordChar(c: Char): Boolean =
-        c.isLetter() || c == '\'' || c == '\u200D' || c in '\u0D80'..'\u0DFF' || c in '\u0B80'..'\u0BFF'
+        c.isLetter() || c == '\'' || c == '\u200D' || c in '\u0D80'..'\u0DFF' || c in '\u0B80'..'\u0BFF' ||
+            Character.getType(c).let { it == Character.NON_SPACING_MARK.toInt() || it == Character.COMBINING_SPACING_MARK.toInt() }
 
     private fun currentPrefix(): String {
         val before = currentInputConnection?.getTextBeforeCursor(24, 0)?.toString() ?: return ""
@@ -3265,7 +3326,7 @@ class RioBoardService : InputMethodService() {
     private fun styled(s: String): String =
         if (fontStyle == 0 || singlishOn || passwordField || s.length != 1) s else Fonts.convert(s[0], fontStyle)
 
-    private fun spaceLabel(): String = "RIO BOARD"
+    private fun spaceLabel(): String = if (siMode) Languages.nativeName(layoutKind) + " \u00B7 RIO BOARD" else "RIO BOARD"
 
     // ---------- RIO STYLES (decoration in front of every word) ----------
     private fun loadRioStyles() {
@@ -3631,6 +3692,7 @@ class RioBoardService : InputMethodService() {
             val i = Intent(this, VoiceActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 .putExtra("si", siMode || singlishOn)
+                .putExtra("loc", if (siMode) Languages.voiceLocale(layoutKind) else "")
             startActivity(i)
         } catch (e: Exception) {
         }
