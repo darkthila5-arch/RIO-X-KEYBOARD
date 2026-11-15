@@ -135,7 +135,10 @@ class RioBoardService : InputMethodService() {
         Theme("Neon", "#070617", "#990B0A2A", "#B0161448", "#00E5FF", "#FF2EE6", "#CC3A38A8", "#FFFFFF", "#A8B8FF", "#CFF8FF", LiveKind.NEON),
         Theme("Waves", "#04202E", "#990A3446", "#B0104A63", "#26E0D0", "#4DA3FF", "#CC2A7A99", "#FFFFFF", "#9AD7EA", "#E6FBFF", LiveKind.WAVES),
         Theme("Matrix", "#020A04", "#99061A0C", "#B0092A12", "#00FF66", "#B6FF3B", "#CC127A33", "#D6FFE0", "#6BE08A", "#7CFFB2", LiveKind.MATRIX),
-        Theme("RGB", "#101018", "#99181822", "#B0242434", "#FF4D8D", "#4DA3FF", "#CC4A4A66", "#FFFFFF", "#C8C8E0", "#FFFFFF", LiveKind.RGB)
+        Theme("RGB", "#101018", "#99181822", "#B0242434", "#FF4D8D", "#4DA3FF", "#CC4A4A66", "#FFFFFF", "#C8C8E0", "#FFFFFF", LiveKind.RGB),
+        // ---- follow the phone (colours come from SystemTheme.kt) ----
+        Theme("Auto", "#17181C", "#2B2D35", "#3A3D49", "#3B82F6", "#6D5BD0", "#5A5F73", "#FFFFFF", "#9AA3C0", "#FFFFFF"),
+        Theme("Material You", "#1C1B1F", "#2B2930", "#49454F", "#6750A4", "#7D5260", "#625B71", "#FFFFFF", "#CAC4D0", "#EADDFF")
     )
 
     // snow colours: auto (theme), then fixed colours, last = rainbow
@@ -177,6 +180,8 @@ class RioBoardService : InputMethodService() {
     private var snowColorIdx = 0
     private var effectIdx = 0         // 0 snow, 1 drops, 2 leaves, 3 flowers, 4 smoke, 5 fire, 6 hearts, 7 rain, 8 fireflies, 9 bubbles, 10 stars
     private var haptic = true
+    private var hapticLevel = 2       // 0 off, 1 light, 2 medium, 3 strong
+    private var pressLevel = 2        // key squeeze: 0 off, 1 soft, 2 normal, 3 strong
     private val boomCounts = intArrayOf(5, 10, 20, 50)
     private val boomDelays = longArrayOf(300L, 600L, 1000L)
     private var boomCountIdx = 1
@@ -251,7 +256,24 @@ class RioBoardService : InputMethodService() {
     private lateinit var barHolder: LinearLayout
     private lateinit var snow: EffectView
     private val handler = Handler(Looper.getMainLooper())
-    private val th: Theme get() = themes[themeIdx]
+    private var themeCache: Theme? = null
+    private var themeCacheIdx = -1
+    private val th: Theme get() {
+        val raw = themes[themeIdx]
+        if (!isSystemTheme(raw)) return raw
+        val c = themeCache
+        if (c != null && themeCacheIdx == themeIdx) return c
+        return resolveTheme(raw).also { themeCache = it; themeCacheIdx = themeIdx }
+    }
+
+    private fun isSystemTheme(t: Theme) = t.name == "Auto" || t.name == "Material You"
+
+    /** Auto / Material You: real colours for the phone's dark mode and wallpaper right now. */
+    private fun resolveTheme(t: Theme): Theme {
+        val night = SystemTheme.isNight(this)
+        val c = (if (t.name == "Material You") SystemTheme.material(this, night) else null) ?: SystemTheme.auto(night)
+        return Theme(t.name, c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8])
+    }
 
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener { captureClip() }
 
@@ -279,6 +301,9 @@ class RioBoardService : InputMethodService() {
         keyTpl = prefs.getInt("ktpl", 0).coerceIn(0, KeyStyles.templates.size - 1)
         keyDecor = prefs.getInt("kdecor", 0).coerceIn(0, KeyStyles.decors.size - 1)
         haptic = prefs.getBoolean("haptic", true)
+        hapticLevel = prefs.getInt("hapticlvl", if (haptic) 2 else 0).coerceIn(0, 3)
+        haptic = hapticLevel > 0
+        pressLevel = prefs.getInt("pressanim", 2).coerceIn(0, 3)
         keyPreview = prefs.getBoolean("preview", true)
         boomCountIdx = prefs.getInt("boom_count", 1).coerceIn(0, boomCounts.size - 1)
         boomDelayIdx = prefs.getInt("boom_delay", 1).coerceIn(0, boomDelays.size - 1)
@@ -413,6 +438,7 @@ class RioBoardService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         if (!::root.isInitialized) return
+        themeCache = null          // Auto / Material You: pick up dark mode and wallpaper changes
         makeWindowTransparent()
         if (shift == 1) shift = 0
         panel = Panel.NONE
@@ -448,6 +474,15 @@ class RioBoardService : InputMethodService() {
         updateAutoCap(redraw = false)
         render()
         applySnow()
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        themeCache = null
+        if (::root.isInitialized && isSystemTheme(themes[themeIdx])) {
+            applySnow()
+            render()
+        }
     }
 
     override fun onUpdateSelection(
@@ -1014,7 +1049,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun feedback(v: View) {
-        if (haptic) v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        if (haptic) Haptics.buzz(this, hapticLevel, v)
     }
 
     // ----- panels -----
@@ -1559,7 +1594,8 @@ class RioBoardService : InputMethodService() {
         root.addView(panelBody(grid))
     }
 
-    private fun swatch(index: Int, t: Theme): View {
+    private fun swatch(index: Int, t0: Theme): View {
+        val t = if (isSystemTheme(t0)) resolveTheme(t0) else t0
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -1645,10 +1681,18 @@ class RioBoardService : InputMethodService() {
         box.addView(chipRow(listOf("Off", "Keyboard", "Full screen"), snowMode) { setSnow(it) })
         box.addView(settingLabel("Effect colour (auto = natural look)"))
         box.addView(colorRow())
-        box.addView(settingLabel("Vibration"))
-        box.addView(chipRow(listOf("On", "Off"), if (haptic) 0 else 1) {
-            haptic = it == 0
-            prefs.edit().putBoolean("haptic", haptic).apply()
+        box.addView(settingLabel("Vibration strength"))
+        box.addView(chipRow(Haptics.names, hapticLevel) {
+            hapticLevel = it
+            haptic = it > 0
+            prefs.edit().putBoolean("haptic", haptic).putInt("hapticlvl", hapticLevel).apply()
+            Haptics.buzz(this, hapticLevel, null)   // feel the new strength straight away
+            render()
+        })
+        box.addView(settingLabel("Key press squeeze"))
+        box.addView(chipRow(listOf("Off", "Soft", "Normal", "Strong"), pressLevel) {
+            pressLevel = it
+            prefs.edit().putInt("pressanim", pressLevel).apply()
             render()
         })
         box.addView(settingLabel("Key pop-up bubble"))
@@ -2174,13 +2218,19 @@ class RioBoardService : InputMethodService() {
     /** Tiny squeeze when a key is touched, springs back on release. */
     private fun pressAnim(v: View, down: Boolean) {
         v.animate().cancel()
-        if (down) v.animate().scaleX(0.94f).scaleY(0.94f).setDuration(40).start()
+        if (pressLevel == 0) {
+            v.scaleX = 1f
+            v.scaleY = 1f
+            return
+        }
+        val sq = floatArrayOf(1f, 0.97f, 0.94f, 0.88f)[pressLevel]
+        if (down) v.animate().scaleX(sq).scaleY(sq).setDuration(40).start()
         else v.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
     }
 
     /** Light keyboard "tick" on key touch. */
     private fun keyTick(v: View) {
-        if (haptic) v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        if (haptic) Haptics.buzz(this, hapticLevel, v)
         if (soundLevel > 0) {
             try {
                 val vol = floatArrayOf(0f, 0.25f, 0.5f, 1f)[soundLevel]
