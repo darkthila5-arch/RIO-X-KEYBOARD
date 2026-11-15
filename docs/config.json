@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-11-15T12:49:00.461Z",
+  "updated": "2026-11-15T12:49:58.388Z",
   "themes": [
     {
       "id": "sakura",
@@ -29,10 +29,10 @@
     }
   ],
   "update": {
-    "versionCode": 41,
-    "versionName": "1.0.41",
+    "versionCode": 47,
+    "versionName": "1.0.47",
     "message": "",
-    "url": "https://github.com/darkthila5-arch/RIO-X-KEYBOARD/releases/download/v41/RIO-BOARD.apk"
+    "url": "https://github.com/darkthila5-arch/RIO-X-KEYBOARD/releases/download/v47/RIO-BOARD.apk"
   },
   "hidden": {
     "themes": [],
