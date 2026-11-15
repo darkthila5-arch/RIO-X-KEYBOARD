@@ -19,7 +19,7 @@ import java.net.URL
 object RemoteConfig {
 
     /** Put YOUR link here. GitHub Pages: https://USER.github.io/REPO/config.json  (docs/config.json in the repo). */
-    const val CONFIG_URL = "https://YOUR_USER.github.io/YOUR_REPO/config.json"
+    const val CONFIG_URL = "https://darkthila5-arch.github.io/RIO-X-KEYBOARD/config.json"
 
     /** c = bg, key, special, accent, active, pressed, text, hint, snow */
     class RTheme(val id: String, val name: String, val c: List<String>)
