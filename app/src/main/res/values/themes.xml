@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Theme while the app is starting: logo on black (like WhatsApp) -->
+    <style name="Theme.Rio.Splash" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@drawable/splash_bg</item>
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+    </style>
+
+    <!-- Normal theme of the app screen (MainActivity switches to it in onCreate) -->
+    <style name="Theme.Rio" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">#0F1014</item>
+        <item name="android:statusBarColor">#0F1014</item>
+        <item name="android:navigationBarColor">#16171D</item>
+    </style>
+</resources>
