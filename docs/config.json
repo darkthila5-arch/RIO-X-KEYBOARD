@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-11-15T13:34:59.673Z",
+  "updated": "2026-11-15T14:07:10.784Z",
   "themes": [
     {
       "id": "sakura",
@@ -54,5 +54,25 @@
       "thumb": "bg/alice-von-ataraxia-pc-wallpape-zjrn_t.jpg",
       "enabled": true
     }
-  ]
+  ],
+  "videos": [],
+  "packs": [],
+  "defaults": {
+    "rev": 2,
+    "effect": 0,
+    "area": 2,
+    "color": -1
+  },
+  "languages": {
+    "hidden": []
+  },
+  "flags": {
+    "disabled": [],
+    "minVersion": 0,
+    "notice": {
+      "on": false,
+      "id": "",
+      "message": ""
+    }
+  }
 }
