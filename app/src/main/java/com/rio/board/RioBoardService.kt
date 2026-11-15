@@ -292,7 +292,7 @@ class RioBoardService : InputMethodService() {
         oneHand = prefs.getInt("onehand", 0).coerceIn(0, 2)
         widthPct = prefs.getInt("widthpct", 100).coerceIn(50, 100)
         heightPct = prefs.getInt("heightpct", 100).coerceIn(70, 140)
-        layoutKind = prefs.getInt("langlayout", 0).coerceIn(0, 2)
+        layoutKind = prefs.getInt("langlayout", 0).coerceIn(0, 3)
         soundLevel = prefs.getInt("sound", 0).coerceIn(0, 3)
         IconView.neo = prefs.getBoolean("neoicons", true)
         autoCap = prefs.getBoolean("autocap", true)
@@ -1737,7 +1737,7 @@ class RioBoardService : InputMethodService() {
             if (it == 0) backupToClipboard() else restoreFromClipboard()
         })
         box.addView(settingLabel("Sinhala / Tamil layout"))
-        box.addView(chipRow(listOf("Sinhala", "Wijesekara", "Tamil"), layoutKind) { setLayout(it) })
+        box.addView(chipRow(listOf("Sinhala", "Wijesekara", "Tamil", "Easy"), layoutKind) { setLayout(it) })
         box.addView(settingLabel("Typing"))
         box.addView(chipRow(listOf("English", "Singlish → සිංහල"), if (singlishOn) 1 else 0) { setSinglish(it == 1) })
         box.addView(settingLabel("Background photo"))
@@ -1899,6 +1899,7 @@ class RioBoardService : InputMethodService() {
         when (layoutKind) {
             1 -> renderWijesekara()
             2 -> renderTamil()
+            3 -> renderEasy()
             else -> renderSinhalaGrid()
         }
     }
@@ -1928,6 +1929,61 @@ class RioBoardService : InputMethodService() {
             else -> "\u25CC\u0DCF"
         }
         root.addView(indicBottomRow(Key(nextLabel, 1.3f, Style.ACTIVE, 20f) { siLayer = (siLayer + 1) % 3; render() }))
+    }
+
+    // ----- Easy Sinhala: consonants and the common vowel signs on ONE screen -----
+    // type a consonant, then tap its sign right below - no layer switching for everyday words.
+    // Long-press a consonant for ready-made syllables (ක -> කා කැ කි කී කු කූ කෙ කො).
+    private val easyMain = listOf(
+        listOf("ක", "ග", "ච", "ජ", "ට", "ඩ", "ත", "ද", "ප", "බ"),
+        listOf("ම", "ය", "ර", "ල", "ව", "ස", "හ", "න", "ණ", "ළ"),
+        listOf("\u0DCF", "\u0DD0", "\u0DD2", "\u0DD3", "\u0DD4", "\u0DD6", "\u0DD9", "\u0DDA", "\u0DDC", "\u0DCA")
+    )
+    private val easyPili = listOf("\u0DCF", "\u0DD0", "\u0DD2", "\u0DD3", "\u0DD4", "\u0DD6", "\u0DD9", "\u0DDC")
+
+    private fun renderEasy() {
+        val layer = when (siLayer) {
+            0 -> easyMain
+            1 -> si2                                   // vowels
+            else -> listOf(si1[2], si3[0], si3[1])     // rarer consonants + rarer signs
+        }
+        layer.forEachIndexed { r, keys ->
+            root.addView(row(keys.mapIndexed { c, s ->
+                val combos = if (siLayer == 0 && r < 2 && popupsOn) easyPili.map { s + it } else emptyList()
+                Key(sinLabel(s), textSp = 22f, alts = digitAlt(r, c) + combos) {
+                    decorateWordStart(s)
+                    easyType(s)
+                }
+            }))
+        }
+        val nextLabel = when ((siLayer + 1) % 3) {
+            0 -> "ක"
+            1 -> "අ"
+            else -> "ඛ"
+        }
+        root.addView(indicBottomRow(Key(nextLabel, 1.3f, Style.ACTIVE, 20f) { siLayer = (siLayer + 1) % 3; render() }))
+    }
+
+    /** Like wijType, but tapping a different vowel sign right after one swaps it (fixes a wrong tap). */
+    private fun easyType(s: String) {
+        val ic = currentInputConnection
+        if (ic != null && s.length == 1) {
+            val c0 = s[0]
+            val last = ic.getTextBeforeCursor(1, 0)?.toString()?.lastOrNull()
+            fun isSign(c: Char?) = c != null && (c in '\u0DCF'..'\u0DDF' || c == '\u0DF2')
+            val joins = (c0 == '\u0DCF' && last == '\u0DD9') || (c0 == '\u0DCA' && last == '\u0DDC') ||
+                (c0 == '\u0DD9' && last == '\u0DD9') || (c0 == '\u0DDF' && last == '\u0DD9')
+            if (!joins && isSign(c0) && isSign(last)) {
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(1, 0)
+                ic.commitText(s, 1)
+                ic.endBatchEdit()
+                suggestions = computeSuggestions()
+                refreshBar()
+                return
+            }
+        }
+        wijType(s)
     }
 
     // ----- Tamil (3 layers: consonants / vowels / vowel signs) -----
@@ -2661,11 +2717,11 @@ class RioBoardService : InputMethodService() {
         render()
     }
 
-    private val layoutNames = listOf("Sinhala", "Wijesekara", "Tamil")
+    private val layoutNames = listOf("Sinhala", "Wijesekara", "Tamil", "Easy Sinhala")
 
     private fun setLayout(kind: Int) {
         flushSinglish()
-        layoutKind = kind.coerceIn(0, 2)
+        layoutKind = kind.coerceIn(0, 3)
         siLayer = 0
         shift = 0
         prefs.edit().putInt("langlayout", layoutKind).apply()
@@ -2673,7 +2729,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun cycleLayout() {
-        setLayout((layoutKind + 1) % 3)
+        setLayout((layoutKind + 1) % 4)
         toast(layoutNames[layoutKind])
     }
 
