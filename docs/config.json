@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-11-15T12:49:58.388Z",
+  "updated": "2026-11-15T12:50:51.460Z",
   "themes": [
     {
       "id": "sakura",
@@ -20,7 +20,7 @@
   "news": [
     {
       "id": "welcome",
-      "title": "Welcome to RIO BOARD",
+      "title": "Hello Welcome to RIO BOARD",
       "body": "New themes and news will show up here.",
       "date": "2026-11-15",
       "link": "",
