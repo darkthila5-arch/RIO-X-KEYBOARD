@@ -298,6 +298,7 @@ class RioBoardService : InputMethodService() {
         emojiSug = prefs.getBoolean("emojisug", true)
         snips = Snips.load(prefs)
         loadRioStyles()
+        videoName = prefs.getString("vbg", null)
         loadBackground()
         instance = this
         try {
@@ -334,6 +335,7 @@ class RioBoardService : InputMethodService() {
         handler.removeCallbacks(boomStep)
         hidePreview()
         hideAlts()
+        releasePlayer()
         cm.removePrimaryClipChangedListener(clipListener)
         if (instance === this) instance = null
         super.onDestroy()
@@ -366,6 +368,30 @@ class RioBoardService : InputMethodService() {
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
         )
+        videoView = android.view.TextureView(this).apply {
+            isClickable = false
+            visibility = View.GONE
+            surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
+                    videoSurface = android.view.Surface(st)
+                    startVideo()
+                }
+
+                override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
+                    fitVideo()
+                }
+
+                override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
+                    releasePlayer()
+                    videoSurface?.release()
+                    videoSurface = null
+                    return true
+                }
+
+                override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+            }
+        }
+        frame.addView(videoView, 0, FrameLayout.LayoutParams(1, 1))
         trail = TrailView(this).also {
             it.isClickable = false
             frame.addView(
@@ -376,7 +402,7 @@ class RioBoardService : InputMethodService() {
                 )
             )
         }
-        frame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateSnowTop() }
+        frame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateSnowTop(); syncVideo() }
         applySize()
         render()
         applySnow()
@@ -444,6 +470,24 @@ class RioBoardService : InputMethodService() {
     }
 
     override fun onEvaluateFullscreenMode(): Boolean = false
+
+    override fun onWindowShown() {
+        super.onWindowShown()
+        windowVisible = true
+        try {
+            player?.start()
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun onWindowHidden() {
+        super.onWindowHidden()
+        windowVisible = false
+        try {
+            player?.pause()
+        } catch (e: Exception) {
+        }
+    }
 
     private fun makeWindowTransparent() {
         try {
@@ -520,6 +564,7 @@ class RioBoardService : InputMethodService() {
         hideAlts()
         swipeKeys.clear()
         applySize()
+        applyVideoBg()
         root.removeAllViews()
         applyRootBg()
         root.addView(barHolder)
@@ -1132,14 +1177,41 @@ class RioBoardService : InputMethodService() {
             }
             tiles.add(tile(file == current, iv) { DefaultBackgrounds.setAsBackground(this, file) })
         }
-        tiles.chunked(3).forEach { rowTiles ->
-            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            rowTiles.forEach { r.addView(it) }
-            repeat(3 - rowTiles.size) {
-                r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+        fun addTiles(list: List<View>) {
+            list.chunked(3).forEach { rowTiles ->
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                rowTiles.forEach { r.addView(it) }
+                repeat(3 - rowTiles.size) {
+                    r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+                }
+                grid.addView(r)
             }
-            grid.addView(r)
         }
+        addTiles(tiles)
+        grid.addView(settingLabel("Animated ▶ (loops, mutes itself when the keyboard closes)"))
+        val vtiles = AnimatedBackgrounds.items.map { (_, id) ->
+            val cell = FrameLayout(this).apply {
+                addView(android.widget.ImageView(this@RioBoardService).apply {
+                    scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                    setBackgroundColor(th.key)
+                    AnimatedBackgrounds.thumb(this@RioBoardService, id)?.let { setImageBitmap(it) }
+                    clipToOutline = true
+                    outlineProvider = object : android.view.ViewOutlineProvider() {
+                        override fun getOutline(view: View, outline: android.graphics.Outline) {
+                            outline.setRoundRect(0, 0, view.width, view.height, dp(10).toFloat())
+                        }
+                    }
+                }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                addView(TextView(this@RioBoardService).apply {
+                    text = "▶"
+                    setTextColor(Color.WHITE)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    setPadding(dp(6), dp(2), dp(6), dp(2))
+                }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
+            }
+            tile(id == videoName, cell) { setVideoBackground(id) }
+        }
+        addTiles(vtiles)
         root.addView(panelBody(grid))
     }
 
@@ -1674,6 +1746,8 @@ class RioBoardService : InputMethodService() {
         })
         box.addView(settingLabel("Default backgrounds"))
         box.addView(DefaultBackgrounds.strip(this))
+        box.addView(settingLabel("Animated backgrounds"))
+        box.addView(AnimatedBackgrounds.strip(this))
         box.addView(TextView(this).apply {
             text = "Open RIO BOARD app"
             gravity = Gravity.CENTER
@@ -3906,6 +3980,109 @@ class RioBoardService : InputMethodService() {
             }
             if (bgBitmap == null) bgOn = false
         }
+        // a photo and a video background exclude each other
+        if (bgOn && videoName != null) {
+            videoName = null
+            prefs.edit().remove("vbg").apply()
+        }
+    }
+
+    // ---------- animated (video) background ----------
+    private var videoName: String? = null
+    private var videoView: android.view.TextureView? = null
+    private var videoSurface: android.view.Surface? = null
+    private var player: android.media.MediaPlayer? = null
+    private var videoW = 0
+    private var videoH = 0
+    private var windowVisible = true
+
+    private fun videoActive(): Boolean = videoName != null && th.live == null
+
+    fun setVideoBackground(name: String) {
+        videoName = name
+        prefs.edit().putString("vbg", name).putBoolean("bgon", false).remove("bgname").apply()
+        try {
+            File(filesDir, "kb_bg.jpg").delete()
+        } catch (e: Exception) {
+        }
+        bgOn = false
+        bgBitmap = null
+        if (videoSurface != null) startVideo()
+        if (::root.isInitialized) render()
+    }
+
+    private fun applyVideoBg() {
+        val v = videoView ?: return
+        val vis = if (videoActive()) View.VISIBLE else View.GONE
+        if (v.visibility != vis) v.visibility = vis
+        if (vis == View.GONE) releasePlayer()
+    }
+
+    /** Keep the video exactly behind the keyboard (the window can be taller because of effects). */
+    private fun syncVideo() {
+        val v = videoView ?: return
+        if (!::root.isInitialized || root.width == 0 || root.height == 0) return
+        val lp = v.layoutParams as? FrameLayout.LayoutParams ?: return
+        val g = Gravity.TOP or Gravity.START
+        if (lp.width != root.width || lp.height != root.height ||
+            lp.leftMargin != root.left || lp.topMargin != root.top || lp.gravity != g
+        ) {
+            lp.gravity = g
+            lp.width = root.width
+            lp.height = root.height
+            lp.leftMargin = root.left
+            lp.topMargin = root.top
+            v.layoutParams = lp
+        }
+    }
+
+    private fun startVideo() {
+        val name = videoName ?: return
+        val sf = videoSurface ?: return
+        releasePlayer()
+        try {
+            val mp = android.media.MediaPlayer()
+            assets.openFd("videos/$name.mp4").use { afd ->
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+            }
+            mp.setSurface(sf)
+            mp.isLooping = true
+            mp.setVolume(0f, 0f)
+            mp.setOnVideoSizeChangedListener { _, w, h ->
+                videoW = w
+                videoH = h
+                fitVideo()
+            }
+            mp.setOnPreparedListener { p -> if (windowVisible) p.start() }
+            mp.setOnErrorListener { _, _, _ ->
+                releasePlayer()
+                true
+            }
+            mp.prepareAsync()
+            player = mp
+        } catch (e: Exception) {
+            releasePlayer()
+        }
+    }
+
+    private fun releasePlayer() {
+        try {
+            player?.release()
+        } catch (e: Exception) {
+        }
+        player = null
+    }
+
+    /** Fill the keyboard with the video (centre-crop), like a wallpaper. */
+    private fun fitVideo() {
+        val v = videoView ?: return
+        val vw = v.width.toFloat()
+        val vh = v.height.toFloat()
+        if (vw <= 0f || vh <= 0f || videoW <= 0 || videoH <= 0) return
+        val scale = maxOf(vw / videoW, vh / videoH)
+        val m = android.graphics.Matrix()
+        m.setScale(scale * videoW / vw, scale * videoH / vh, vw / 2f, vh / 2f)
+        v.setTransform(m)
     }
 
     /** Called by PickImageActivity after a new photo was saved. */
@@ -3915,7 +4092,8 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun removeBackground() {
-        prefs.edit().putBoolean("bgon", false).remove("bgname").apply()
+        videoName = null
+        prefs.edit().putBoolean("bgon", false).remove("bgname").remove("vbg").apply()
         try {
             File(filesDir, "kb_bg.jpg").delete()
         } catch (e: Exception) {
@@ -3936,6 +4114,11 @@ class RioBoardService : InputMethodService() {
             root.background = liveBg
             return
         }
+        if (videoActive()) {
+            // the video is drawn behind; only a light tint of the theme colour here so keys stay readable
+            root.setBackgroundColor((th.bg and 0x00FFFFFF) or (0x44 shl 24))
+            return
+        }
         val bmp = bgBitmap
         if (bgOn && bmp != null) {
             // photo + a see-through layer of the theme colour so keys stay readable
@@ -3948,5 +4131,5 @@ class RioBoardService : InputMethodService() {
 
     /** Make opaque key colours slightly see-through when a photo is behind them. */
     private fun kc(c: Int): Int =
-        if (bgOn && bgBitmap != null && Color.alpha(c) == 255) (c and 0x00FFFFFF) or (0xCC shl 24) else c
+        if (((bgOn && bgBitmap != null) || videoActive()) && Color.alpha(c) == 255) (c and 0x00FFFFFF) or (0xCC shl 24) else c
 }

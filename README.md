@@ -10,3 +10,4 @@ Sinhala + English Android keyboard. Push to GitHub -> Actions builds the APK -> 
 - **Slide gestures**: slide on the space bar to move the cursor, slide left on backspace to delete words.
 - **Auto-capital**, double-space → ". ", **emoji suggestions**, optional **key sounds**.
 - **Backup / restore** of learned words and shortcuts (Settings → copies to clipboard).
+- **Animated video backgrounds** (8 looping clips: Aurora, Neon waves, Starfield, Lava, Synthwave, Bokeh, Galaxy, Plasma). Pick them in the Backgrounds panel or Settings.
