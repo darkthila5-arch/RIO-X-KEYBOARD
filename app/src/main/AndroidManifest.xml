@@ -74,6 +74,13 @@
             android:taskAffinity=""
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- WhatsApp status gallery: full size preview with Save / Share / Delete -->
+        <activity
+            android:name=".StatusActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
+
         <!-- serves made stickers/GIFs to other apps (read-only) -->
         <provider
             android:name=".RioFileProvider"

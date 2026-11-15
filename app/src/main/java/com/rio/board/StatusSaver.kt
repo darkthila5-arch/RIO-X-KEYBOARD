@@ -22,7 +22,10 @@ import java.io.File
 object StatusSaver {
     const val PREF_TREE = "status_tree"
 
-    class Item(val uri: Uri, val name: String, val mime: String, val modified: Long) {
+    /** Statuses saved to the gallery during this run (shared by the keyboard panel and the gallery screen). */
+    val savedKeys = HashSet<String>()
+
+    class Item(val uri: Uri, val name: String, val mime: String, val modified: Long, val size: Long = 0L) {
         val isVideo: Boolean
             get() = mime.startsWith("video/") || name.lowercase().let { it.endsWith(".mp4") || it.endsWith(".3gp") || it.endsWith(".mkv") }
     }
@@ -52,7 +55,8 @@ object StatusSaver {
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE,
-            DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+            DocumentsContract.Document.COLUMN_SIZE
         )
         ctx.contentResolver.query(children, cols, null, null, null)?.use { c ->
             while (c.moveToNext()) {
@@ -61,7 +65,7 @@ object StatusSaver {
                 val mime = c.getString(2) ?: ""
                 if (mime == DocumentsContract.Document.MIME_TYPE_DIR) continue
                 if (!isMedia(name, mime)) continue
-                out.add(Item(DocumentsContract.buildDocumentUriUsingTree(tree, id), name, mime, c.getLong(3)))
+                out.add(Item(DocumentsContract.buildDocumentUriUsingTree(tree, id), name, mime, c.getLong(3), c.getLong(4)))
             }
         }
         out.sortByDescending { it.modified }
@@ -87,6 +91,37 @@ object StatusSaver {
                 val o = BitmapFactory.Options().apply { inSampleSize = sample }
                 ctx.contentResolver.openInputStream(item.uri)?.use { BitmapFactory.decodeStream(it, null, o) }
             }
+        } catch (e: Exception) {
+            null
+        } catch (e: OutOfMemoryError) {
+            null
+        }
+    }
+
+    /** true when the allowed folder may also be changed (needed to delete a status). */
+    fun canDelete(ctx: Context, tree: Uri): Boolean = try {
+        ctx.contentResolver.persistedUriPermissions.any { it.uri == tree && it.isWritePermission }
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Blocking: removes the status file from WhatsApp's .Statuses folder. */
+    fun delete(ctx: Context, item: Item): Boolean = try {
+        DocumentsContract.deleteDocument(ctx.contentResolver, item.uri)
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Blocking: a picture of the status sized for the screen (video = first frame). */
+    fun fullBitmap(ctx: Context, item: Item, maxPx: Int): Bitmap? {
+        return try {
+            if (item.isVideo) return thumb(ctx, item)
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            ctx.contentResolver.openInputStream(item.uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            var sample = 1
+            while (bounds.outWidth / sample > maxPx || bounds.outHeight / sample > maxPx) sample *= 2
+            val o = BitmapFactory.Options().apply { inSampleSize = sample }
+            ctx.contentResolver.openInputStream(item.uri)?.use { BitmapFactory.decodeStream(it, null, o) }
         } catch (e: Exception) {
             null
         } catch (e: OutOfMemoryError) {
@@ -131,6 +166,7 @@ object StatusSaver {
                     MediaScannerConnection.scanFile(ctx, arrayOf(f.path), arrayOf(mime), null)
                 }
             }
+            savedKeys.add(item.uri.toString())
             true
         } catch (e: Exception) {
             false

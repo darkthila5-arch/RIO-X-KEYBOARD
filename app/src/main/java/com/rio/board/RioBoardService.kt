@@ -1335,7 +1335,7 @@ class RioBoardService : InputMethodService() {
         }
         addTiles(tiles)
         grid.addView(settingLabel("Animated ▶ (loops, mutes itself when the keyboard closes)"))
-        val vtiles = AnimatedBackgrounds.items.filter { it.second !in remoteCfg.hiddenVideos }.map { (_, id) ->
+        val vtiles = AnimatedBackgrounds.all(this).map { (_, id) ->
             val cell = FrameLayout(this).apply {
                 addView(android.widget.ImageView(this@RioBoardService).apply {
                     scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
@@ -1502,6 +1502,32 @@ class RioBoardService : InputMethodService() {
         }.start()
     }
 
+    /** Opens the full size preview (Save / Share / Delete) for a status, or the whole gallery when [item] is null. */
+    private fun openStatusViewer(item: StatusSaver.Item?) {
+        try {
+            val i = Intent(this, StatusActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (item != null) i.putExtra("open", item.uri.toString())
+            startActivity(i)
+        } catch (e: Exception) {
+        }
+    }
+
+    /** Called by StatusActivity after something was saved or deleted. */
+    fun statusChangedFromApp() {
+        statusItems = null
+        if (::root.isInitialized && panel == Panel.STATUS) render()
+    }
+
+    /** Called by the app (Look tab) after the effect, area or colour changed. */
+    fun reloadEffects() {
+        snowMode = prefs.getInt("snow", 2).coerceIn(0, 2)
+        lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
+        snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
+        effectIdx = prefs.getInt("effect", 0).coerceIn(0, EffectView.Type.values().size - 1)
+        applySnow()
+        if (::root.isInitialized) render()
+    }
+
     private fun renderStatus() {
         root.addView(panelHeader("WhatsApp statuses", IconView.Kind.HISTORY) {
             statusItems = null
@@ -1546,11 +1572,23 @@ class RioBoardService : InputMethodService() {
             root.addView(panelBody(box))
             return
         }
-        box.addView(hintText("Tap a status to save it to your gallery."))
+        box.addView(hintText("Tap a status for the full size preview (Save · Share · Delete)."))
+        box.addView(TextView(this).apply {
+            text = "Open full gallery"
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            background = roundBg(th.accent, 12)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
+                setMargins(dp(3), dp(2), dp(3), dp(6))
+            }
+            isClickable = true
+            setOnClickListener { openStatusViewer(null) }
+        })
         fun tile(item: StatusSaver.Item): View {
             val key = item.uri.toString()
             return FrameLayout(this).apply {
-                layoutParams = LinearLayout.LayoutParams(0, dp(96), 1f).apply { setMargins(dp(2), dp(2), dp(2), dp(2)) }
+                layoutParams = LinearLayout.LayoutParams(0, dp(110), 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
                 isClickable = true
                 clipToOutline = true
                 outlineProvider = object : android.view.ViewOutlineProvider() {
@@ -1575,7 +1613,7 @@ class RioBoardService : InputMethodService() {
                         ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.START
                     ))
                 }
-                if (statusSaved.contains(key)) {
+                if (statusSaved.contains(key) || StatusSaver.savedKeys.contains(key)) {
                     addView(TextView(this@RioBoardService).apply {
                         text = "\u2713 Saved"
                         gravity = Gravity.CENTER
@@ -1587,7 +1625,7 @@ class RioBoardService : InputMethodService() {
                 }
                 setOnClickListener {
                     feedback(it)
-                    saveStatus(item)
+                    openStatusViewer(item)
                 }
             }
         }
@@ -4538,8 +4576,12 @@ class RioBoardService : InputMethodService() {
         releasePlayer()
         try {
             val mp = android.media.MediaPlayer()
-            assets.openFd("videos/$name.mp4").use { afd ->
-                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+            if (AnimatedBackgrounds.isCustom(name)) {
+                mp.setDataSource(AnimatedBackgrounds.videoFile(this, name).path)   // video the user added
+            } else {
+                assets.openFd("videos/$name.mp4").use { afd ->
+                    mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                }
             }
             mp.setSurface(sf)
             mp.isLooping = true
@@ -4587,7 +4629,7 @@ class RioBoardService : InputMethodService() {
         if (::root.isInitialized) render()
     }
 
-    private fun removeBackground() {
+    fun removeBackground() {
         videoName = null
         prefs.edit().putBoolean("bgon", false).remove("bgname").remove("vbg").apply()
         try {

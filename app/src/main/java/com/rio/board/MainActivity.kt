@@ -30,6 +30,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
@@ -46,6 +47,15 @@ class MainActivity : Activity() {
     private lateinit var updateBox: LinearLayout
     private var density = 1f
     private var statusInfo: TextView? = null
+    private var vidHolder: LinearLayout? = null
+    private var effectPreview: EffectView? = null
+    private val effectNames = listOf(
+        "Snow \u2744", "Water drops \uD83D\uDCA7", "Leaves \uD83C\uDF43", "Flowers \uD83C\uDF38",
+        "Smoke \uD83D\uDCA8", "Fire \uD83D\uDD25", "Hearts \u2764", "Rain \uD83C\uDF27",
+        "Fireflies \u2728", "Bubbles \u25CB", "Stars \u2B50"
+    )
+    private val colourNames = listOf("Auto", "White", "Blue", "Pink", "Yellow", "Green", "Rainbow")
+    private val colourHex = listOf("", "#FFFFFF", "#7CC8FF", "#FF8AC8", "#FFD54A", "#7CFFB2", "")
     private val pages = ArrayList<View>()
     private val tabs = ArrayList<TextView>()
 
@@ -349,7 +359,7 @@ class MainActivity : Activity() {
                 }
             }
         )
-        return pageOf(pageHeader("Typing", "Singlish, shortcuts and styles"), singlish, shortcuts, styles)
+        return pageOf(pageHeader("Typing", "Languages, Singlish, shortcuts and styles"), languagesCard(), singlish, shortcuts, styles)
     }
 
     // ------------------------------------------------------------------ LOOK
@@ -377,7 +387,7 @@ class MainActivity : Activity() {
             title("\uD83C\uDFA8  Themes"),
             note("Change the keyboard colours from the keyboard itself: open the keyboard and tap the theme button in the toolbar. New themes from the RIO team appear there automatically.")
         )
-        return pageOf(pageHeader("Look", "Make the keyboard yours"), bgCard, themes)
+        return pageOf(pageHeader("Look", "Make the keyboard yours"), effectsCard(), bgCard, videoCard(), themes)
     }
 
     // ------------------------------------------------------------------ MORE
@@ -390,11 +400,14 @@ class MainActivity : Activity() {
             note(
                 "1. Tap a button below and press \"Use this folder\" (the .Statuses folder is shown first).\n" +
                     "2. Watch a status in WhatsApp.\n" +
-                    "3. Open the keyboard's status icon and tap a status to save it to your gallery.\n" +
+                    "3. Open the status gallery here (or the keyboard's status icon), tap a status for the full size preview, then Save, Share or Delete.\n" +
                     "Please only save statuses people are happy for you to keep."
             ),
             btn("Allow WhatsApp statuses") { pickStatusFolder(false) },
             btn("Allow WhatsApp Business statuses", false) { pickStatusFolder(true) },
+            btn("Open status gallery", false) {
+                startActivity(Intent(this@MainActivity, StatusActivity::class.java))
+            },
             si
         )
         refreshStatusInfo()
@@ -450,8 +463,8 @@ class MainActivity : Activity() {
         else "$app%2FMedia%2F.Statuses"
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
         i.addFlags(
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
-                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
         )
         if (Build.VERSION.SDK_INT >= 26) {
             i.putExtra(
@@ -468,18 +481,199 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 31 && resultCode == RESULT_OK) {
+            val uri = data?.data ?: return
+            Toast.makeText(this, "Adding video...", Toast.LENGTH_SHORT).show()
+            AnimatedBackgrounds.import(this, uri) { id, msg ->
+                if (id != null) {
+                    AnimatedBackgrounds.use(this, id)
+                    Toast.makeText(this, "Video background set", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                }
+                refreshVideoStrip()
+            }
+        }
         if (requestCode == 21 && resultCode == RESULT_OK) {
             val uri = data?.data
             if (uri != null) {
                 try {
-                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    contentResolver.takePersistableUriPermission(
+                        uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
                 } catch (e: Exception) {
+                    try {
+                        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } catch (e2: Exception) {
+                    }
                 }
                 prefs.edit().putString(StatusSaver.PREF_TREE, uri.toString()).apply()
                 refreshStatusInfo()
                 Toast.makeText(this, "Status folder allowed", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    // ------------------------------------------------------------------ video backgrounds
+
+    private fun videoCard(): View {
+        val holder = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        vidHolder = holder
+        refreshVideoStrip()
+        return card(
+            title("\uD83C\uDFAC  Video backgrounds"),
+            note("Tap a clip to play it behind the keys. Add your own short video (max 60 MB, it is muted and loops). Tap \u2715 on your own clip to remove it."),
+            holder,
+            btn("Add my video") {
+                val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = "video/*"
+                }
+                try {
+                    startActivityForResult(i, 31)
+                } catch (e: Exception) {
+                    Toast.makeText(this@MainActivity, "Could not open the video picker", Toast.LENGTH_LONG).show()
+                }
+            },
+            btn("Stop video background", false) {
+                val svc = RioBoardService.instance
+                if (svc != null) svc.removeBackground() else prefs.edit().remove("vbg").apply()
+                Toast.makeText(this@MainActivity, "Video background off", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    private fun refreshVideoStrip() {
+        val h = vidHolder ?: return
+        h.removeAllViews()
+        h.addView(AnimatedBackgrounds.strip(this, {}, { refreshVideoStrip() }))
+    }
+
+    // ------------------------------------------------------------------ effects
+
+    private fun applyEffects() {
+        RioBoardService.instance?.reloadEffects()
+        updateEffectPreview()
+    }
+
+    private fun updateEffectPreview() {
+        val p = effectPreview ?: return
+        val eff = prefs.getInt("effect", 0).coerceIn(0, EffectView.Type.values().size - 1)
+        val col = prefs.getInt("snowcol", 0).coerceIn(0, colourNames.size - 1)
+        p.type = EffectView.Type.values()[eff]
+        p.colors = when (col) {
+            0 -> intArrayOf(Color.WHITE)
+            colourNames.size - 1 -> intArrayOf(
+                Color.parseColor("#FF5C5C"), Color.parseColor("#FFD54A"), Color.parseColor("#7CFFB2"),
+                Color.parseColor("#7CC8FF"), Color.parseColor("#C58CFF")
+            )
+            else -> intArrayOf(Color.parseColor(colourHex[col]))
+        }
+        p.natural = col == 0 && eff != 0
+        p.base = 40
+        p.running = prefs.getInt("snow", 2) != 0
+    }
+
+    /** Rows of chips; the picked one is highlighted. */
+    private fun chipGrid(labels: List<String>, perRow: Int, selected: () -> Int, onPick: (Int) -> Unit): LinearLayout {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun build() {
+            box.removeAllViews()
+            labels.chunked(perRow).forEachIndexed { r, part ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = lp(top = 6)
+                }
+                part.forEachIndexed { c, t ->
+                    val idx = r * perRow + c
+                    val on = idx == selected()
+                    row.addView(TextView(this).apply {
+                        text = t
+                        gravity = Gravity.CENTER
+                        setTextColor(Color.WHITE)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                        if (on) typeface = Typeface.DEFAULT_BOLD
+                        setPadding(dp(4), dp(10), dp(4), dp(10))
+                        background = if (on) buttonBg(true, 12) else bg(FIELD, 12)
+                        layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f).apply { setMargins(dp(3), 0, dp(3), 0) }
+                        setOnClickListener {
+                            onPick(idx)
+                            build()
+                        }
+                    })
+                }
+                repeat(perRow - part.size) {
+                    row.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+                }
+                box.addView(row)
+            }
+        }
+        build()
+        return box
+    }
+
+    private fun effectsCard(): View {
+        val preview = EffectView(this)
+        effectPreview = preview
+        val pBox = FrameLayout(this).apply {
+            background = bg(Color.parseColor("#0A0B10"), 14)
+            clipToOutline = true
+            layoutParams = lp(top = 4, bottom = 6).apply { height = dp(120) }
+            addView(preview, FrameLayout.LayoutParams(MATCH, MATCH))
+        }
+        updateEffectPreview()
+        return card(
+            title("\u2744\uFE0F  Keyboard effects"),
+            note("Pick the falling effect shown over the keyboard. The preview below shows how it looks."),
+            pBox,
+            tv("Effect", 14f, Color.WHITE, true).apply { setPadding(0, dp(6), 0, 0) },
+            chipGrid(effectNames, 3, { prefs.getInt("effect", 0) }) {
+                prefs.edit().putInt("effect", it).apply()
+                applyEffects()
+            },
+            tv("Where", 14f, Color.WHITE, true).apply { setPadding(0, dp(12), 0, 0) },
+            chipGrid(listOf("Off", "Keyboard", "Full screen"), 3, { prefs.getInt("snow", 2) }) {
+                val e = prefs.edit().putInt("snow", it)
+                if (it != 0) e.putInt("lastsnow", it)
+                e.apply()
+                applyEffects()
+            },
+            tv("Colour", 14f, Color.WHITE, true).apply { setPadding(0, dp(12), 0, 0) },
+            chipGrid(colourNames, 4, { prefs.getInt("snowcol", 0) }) {
+                prefs.edit().putInt("snowcol", it).apply()
+                applyEffects()
+            },
+            note("Auto = the natural look of the effect.").apply { setPadding(0, dp(8), 0, 0) }
+        )
+    }
+
+    // ------------------------------------------------------------------ languages
+
+    private fun languagesCard(): View {
+        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        Languages.entries.forEach { e ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), dp(8), dp(10), dp(8))
+                background = bg(FIELD, 12)
+                layoutParams = lp(top = 6)
+            }
+            row.addView(tv("${e.native}   ", 17f, Color.WHITE, true))
+            row.addView(tv(e.english, 13f, SUB).apply { layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f) })
+            row.addView(Switch(this).apply {
+                isChecked = Languages.isOn(prefs, e.id)
+                setOnCheckedChangeListener { _, on ->
+                    if (on != Languages.isOn(prefs, e.id)) Languages.toggle(prefs, e.id)
+                }
+            })
+            rows.addView(row)
+        }
+        return card(
+            title("\uD83C\uDF10  Languages"),
+            note("Choose the languages the language button on the keyboard switches between. English is always there. Changes work straight away."),
+            rows
+        )
     }
 
     // ------------------------------------------------------------------ lists
@@ -542,8 +736,14 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onPause() {
+        effectPreview?.running = false
+        super.onPause()
+    }
+
     override fun onResume() {
         super.onResume()
+        updateEffectPreview()
         if (::setupBox.isInitialized) refreshSetup()
         if (::snipList.isInitialized) refreshSnips()
         if (::styleList.isInitialized) refreshStyles()
