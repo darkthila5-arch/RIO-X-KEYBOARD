@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RIO BOARD Admin</title>
+<style>
+:root{--bg:#f4f5f8;--card:#fff;--ink:#16181d;--mut:#667085;--line:#e1e4ea;--acc:#3b82f6;--accink:#fff;--bad:#d92d20;--ok:#12803c;--field:#fff}
+@media (prefers-color-scheme:dark){:root{--bg:#101218;--card:#181b23;--ink:#eef0f6;--mut:#98a2b3;--line:#2a2f3b;--acc:#5b9bff;--accink:#0b1220;--bad:#ff6b5e;--ok:#4cd484;--field:#10131a}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+header h1{font-size:17px;margin:0;flex:1;min-width:140px}
+.pill{font-size:12px;padding:3px 9px;border-radius:99px;border:1px solid var(--line);color:var(--mut)}
+.pill.bad{color:var(--bad);border-color:var(--bad)}.pill.ok{color:var(--ok);border-color:var(--ok)}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 13px;border-radius:10px;cursor:pointer}
+button.pri{background:var(--acc);color:var(--accink);border-color:var(--acc);font-weight:600}
+button.del{color:var(--bad)}
+button:disabled{opacity:.5}
+nav{display:flex;gap:6px;padding:10px 14px 0;overflow-x:auto}
+nav button{border-radius:10px 10px 0 0;border-bottom:none}
+nav button.on{background:var(--acc);color:var(--accink);border-color:var(--acc)}
+main{padding:14px;max-width:1100px;margin:0 auto}
+.grid{display:grid;gap:14px;grid-template-columns:1fr}
+@media(min-width:820px){.grid{grid-template-columns:260px 1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+.item{display:flex;gap:10px;align-items:center;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer;background:var(--card)}
+.item.on{border-color:var(--acc);box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 30%,transparent)}
+.item small{color:var(--mut);display:block}
+.item.off{opacity:.55}
+.dots{display:flex}.dots i{width:14px;height:14px;border-radius:50%;margin-right:-4px;border:1px solid rgba(128,128,128,.4)}
+label{display:block;font-size:12px;color:var(--mut);margin:10px 0 4px}
+input[type=text],input[type=number],input[type=date],input[type=password],textarea,select{width:100%;font:inherit;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--field);color:var(--ink)}
+textarea{min-height:110px;resize:vertical}
+.row{display:flex;gap:8px;align-items:center}
+.crow{display:grid;grid-template-columns:110px 44px 1fr;gap:8px;align-items:center;margin-top:6px}
+.crow span{font-size:13px}
+input[type=color]{width:44px;height:36px;padding:0;border:1px solid var(--line);border-radius:8px;background:none}
+.chk{display:flex;gap:8px;align-items:center;margin-top:12px;font-size:14px;color:var(--ink)}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.hint{color:var(--mut);font-size:13px;margin:6px 0}
+.pv{border-radius:14px;padding:8px;max-width:420px;margin:8px 0}
+.pbar{font-size:13px;padding:2px 6px 8px}
+.pr{display:flex;gap:4px;margin-bottom:5px;justify-content:center}
+.pk{flex:1;max-width:38px;min-width:0;height:34px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px}
+.pk.w{flex:2;max-width:76px}.pk.sp{flex:5;max-width:170px;font-size:11px}
+.news{border-radius:12px;padding:10px 12px;margin:6px 0;border:1px solid var(--line)}
+.news b{display:block}.news small{color:var(--mut)}
+dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);max-width:520px;width:calc(100% - 24px);padding:16px}
+dialog::backdrop{background:rgba(0,0,0,.5)}
+code{background:var(--field);border:1px solid var(--line);border-radius:6px;padding:1px 5px;word-break:break-all}
+</style>
+</head>
+<body>
+<header>
+  <h1>RIO BOARD · Admin</h1>
+  <span id="status" class="pill">not loaded</span>
+  <button id="bLoad">Reload</button>
+  <button id="bSet">⚙ GitHub</button>
+  <button id="bPub" class="pri">Publish</button>
+</header>
+<nav id="tabs"></nav>
+<main id="view"></main>
+
+<dialog id="dlg">
+  <h3 style="margin-top:0">GitHub connection</h3>
+  <p class="hint">The admin saves <code>config.json</code> into your repo. The keyboard reads it from your GitHub Pages site. Your token stays in this browser only and is sent only to api.github.com.</p>
+  <label>GitHub username (owner)</label><input type="text" id="sOwner" autocomplete="off">
+  <label>Repository name</label><input type="text" id="sRepo" autocomplete="off">
+  <label>Branch</label><input type="text" id="sBranch" autocomplete="off">
+  <label>File path in the repo</label><input type="text" id="sPath" autocomplete="off">
+  <label>Token (fine-grained, this repo only, Contents: read and write)</label><input type="password" id="sToken" autocomplete="off">
+  <p class="hint">Link to put in the app (<code>RemoteConfig.kt</code>):<br><code id="sUrl"></code></p>
+  <div class="btns"><button id="sSave" class="pri">Save</button><button id="sClose">Close</button></div>
+</dialog>
+
+<script>
+//#pure-start
+const KEYS=['bg','key','special','accent','active','pressed','text','hint','snow'];
+const LABELS={bg:'Background',key:'Keys',special:'Special keys',accent:'Enter / accent',active:'Active key',pressed:'Pressed key',text:'Text',hint:'Hint text',snow:'Effect colour'};
+const PRESETS={
+ Dark:['#17181C','#2B2D35','#3A3D49','#3B82F6','#6D5BD0','#5A5F73','#FFFFFF','#9AA3C0','#FFFFFF'],
+ Midnight:['#0B1026','#18204A','#232C63','#00B4D8','#7B2CBF','#3A4690','#FFFFFF','#8FA3FF','#DDEBFF'],
+ Forest:['#0F1F17','#1C3A2A','#26503A','#2ECC71','#F39C12','#3F7A58','#FFFFFF','#9BD6B0','#FFFFFF'],
+ Rose:['#2A1220','#4A2038','#63304D','#FF4D8D','#B84DFF','#8A3F67','#FFFFFF','#F5A9CC','#FFE8F2'],
+ Ocean:['#06202B','#0E3A4D','#16526B','#00C2A8','#3B82F6','#2A7A99','#FFFFFF','#8CD3E6','#E6FBFF'],
+ Sunset:['#2B1408','#4D2A12','#6A3A1A','#FF7A18','#E8478B','#8F5A30','#FFFFFF','#F2B88A','#FFF1E0'],
+ Purple:['#1B1030','#2F1D54','#432A78','#A855F7','#EC4899','#6A4DA8','#FFFFFF','#C4A8F0','#F3E8FF'],
+ Light:['#E8EAF0','#FFFFFF','#C9CEDB','#3B82F6','#7C6CE0','#B8BFD3','#111111','#5B6382','#8FB8FF']
+};
+const HEX=/^#([0-9a-f]{6}|[0-9a-f]{8})$/i;
+function cssColor(hex){
+  if(!HEX.test(hex))return 'transparent';
+  if(hex.length===7)return hex;
+  const a=parseInt(hex.slice(1,3),16)/255;
+  return 'rgba('+parseInt(hex.slice(3,5),16)+','+parseInt(hex.slice(5,7),16)+','+parseInt(hex.slice(7,9),16)+','+a.toFixed(3)+')';
+}
+function pickerValue(hex){return HEX.test(hex)?('#'+hex.slice(-6)).toLowerCase():'#000000'}
+function withPicker(old,rgb){return(HEX.test(old)&&old.length===9)?('#'+old.slice(1,3)+rgb.slice(1)).toUpperCase():rgb.toUpperCase()}
+function slug(s){return(s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,30))||'theme'}
+function b64enc(str){const b=new TextEncoder().encode(str);let s='';b.forEach(x=>{s+=String.fromCharCode(x)});return btoa(s)}
+function b64dec(t){const bin=atob(t.replace(/\s/g,''));return new TextDecoder().decode(Uint8Array.from(bin,c=>c.charCodeAt(0)))}
+function newTheme(name,preset){const t={id:'',name:name,enabled:true};KEYS.forEach((k,i)=>{t[k]=PRESETS[preset||'Dark'][i]});return t}
+function today(){return new Date().toISOString().slice(0,10)}
+function normalize(o){
+  const c={version:1,updated:'',themes:[],news:[],update:null};
+  if(!o||typeof o!=='object')return c;
+  (Array.isArray(o.themes)?o.themes:[]).forEach(t=>{
+    if(!t||typeof t!=='object')return;
+    const n=newTheme(String(t.name||'Theme'));
+    n.id=String(t.id||slug(n.name));n.enabled=t.enabled!==false;
+    KEYS.forEach(k=>{if(typeof t[k]==='string')n[k]=t[k]});
+    n.name=String(t.name||'Theme');c.themes.push(n);
+  });
+  (Array.isArray(o.news)?o.news:[]).forEach(x=>{
+    if(!x||typeof x!=='object')return;
+    c.news.push({id:String(x.id||('n'+Math.random().toString(36).slice(2,8))),title:String(x.title||''),body:String(x.body||''),date:String(x.date||today()),link:String(x.link||''),pinned:!!x.pinned,enabled:x.enabled!==false});
+  });
+  if(o.update&&typeof o.update==='object'&&Number(o.update.versionCode)>0){
+    c.update={versionCode:Number(o.update.versionCode)|0,versionName:String(o.update.versionName||''),message:String(o.update.message||''),url:String(o.update.url||'')};
+  }
+  return c;
+}
+function validate(c){
+  const errs=[];const seen=new Set();
+  c.themes.forEach((t,i)=>{
+    const nm=t.name.trim();
+    if(!nm)errs.push('Theme '+(i+1)+': name is empty');
+    else if(nm.length>18)errs.push('Theme "'+nm+'": name is longer than 18 letters');
+    else if(/^(auto|material you)$/i.test(nm))errs.push('Theme "'+nm+'": that name is used by the app');
+    if(seen.has(nm.toLowerCase()))errs.push('Theme "'+nm+'": two themes have the same name');
+    seen.add(nm.toLowerCase());
+    KEYS.forEach(k=>{if(!HEX.test(t[k]))errs.push('Theme "'+nm+'": '+LABELS[k]+' must look like #RRGGBB')});
+  });
+  c.news.forEach((n,i)=>{
+    if(!n.title.trim())errs.push('News '+(i+1)+': title is empty');
+    if(n.link&&!/^https:\/\//i.test(n.link))errs.push('News "'+n.title+'": link must start with https://');
+  });
+  if(c.update){
+    if(!(c.update.versionCode>0))errs.push('Update: version code must be a number above 0');
+    if(c.update.url&&!/^https:\/\//i.test(c.update.url))errs.push('Update: link must start with https://');
+  }
+  return errs;
+}
+function buildJson(c){
+  const out={version:1,updated:new Date().toISOString(),themes:[],news:[],update:c.update};
+  const ids=new Set();
+  c.themes.forEach(t=>{
+    let id=slug(t.name),n=2;while(ids.has(id)){id=slug(t.name)+'-'+(n++)}ids.add(id);
+    const o={id:id,name:t.name.trim(),enabled:!!t.enabled};KEYS.forEach(k=>{o[k]=t[k].toUpperCase()});out.themes.push(o);
+  });
+  out.news=c.news.slice().sort((a,b)=>(b.pinned-a.pinned)||(b.date<a.date?-1:b.date>a.date?1:0)).map(n=>({id:n.id,title:n.title.trim(),body:n.body,date:n.date,link:n.link.trim(),pinned:!!n.pinned,enabled:!!n.enabled}));
+  if(!out.update)delete out.update;
+  return JSON.stringify(out,null,2)+'\n';
+}
+//#pure-end
+
+const S={owner:'',repo:'',branch:'main',path:'docs/config.json',token:''};
+let cfg=normalize(null),sha=null,dirty=false,tab='themes',selT=0,selN=0;
+const $=s=>document.querySelector(s);
+
+function h(tag,attrs,...kids){
+  const e=document.createElement(tag);
+  for(const[k,v]of Object.entries(attrs||{})){
+    if(k==='class')e.className=v;
+    else if(k==='value')e.value=v;
+    else if(k==='checked')e.checked=!!v;
+    else if(k.startsWith('on'))e.addEventListener(k.slice(2),v);
+    else if(v===true)e.setAttribute(k,'');
+    else if(v!==false&&v!=null)e.setAttribute(k,v);
+  }
+  kids.flat(Infinity).forEach(c=>{if(c==null||c===false)return;e.append(c.nodeType?c:document.createTextNode(String(c)))});
+  return e;
+}
+function setStatus(t,kind){const s=$('#status');s.textContent=t;s.className='pill'+(kind?' '+kind:'')}
+function touch(){dirty=true;setStatus('unsaved changes','bad')}
+function loadSettings(){try{Object.assign(S,JSON.parse(localStorage.getItem('rio_admin')||'{}'))}catch(e){}}
+function saveSettings(){try{localStorage.setItem('rio_admin',JSON.stringify(S))}catch(e){}}
+
+/* ---------- GitHub ---------- */
+function apiUrl(){return 'https://api.github.com/repos/'+encodeURIComponent(S.owner)+'/'+encodeURIComponent(S.repo)+'/contents/'+S.path.split('/').map(encodeURIComponent).join('/')}
+function hdr(){const x={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};if(S.token)x.Authorization='Bearer '+S.token;return x}
+async function errText(r){let m='';try{m=(await r.json()).message||''}catch(e){}
+  if(r.status===401)return 'Token not accepted (401). Make a new token.';
+  if(r.status===403)return 'GitHub says no (403): '+m;
+  if(r.status===404)return 'Not found (404). Check owner, repository and that the token can see this repo.';
+  return 'GitHub error '+r.status+(m?': '+m:'')}
+async function ghGet(){
+  const r=await fetch(apiUrl()+'?ref='+encodeURIComponent(S.branch),{headers:hdr(),cache:'no-store'});
+  if(r.status===404)return{sha:null,text:null};
+  if(!r.ok)throw new Error(await errText(r));
+  const j=await r.json();
+  if(typeof j.content!=='string')throw new Error('File is too big or is a folder.');
+  return{sha:j.sha,text:b64dec(j.content)};
+}
+async function load(){
+  if(!S.owner||!S.repo){setStatus('set GitHub first','bad');return}
+  if(dirty&&!confirm('You have unsaved changes. Reload and lose them?'))return;
+  setStatus('loading…');
+  try{
+    const g=await ghGet();sha=g.sha;
+    cfg=normalize(g.text?JSON.parse(g.text):null);
+    selT=0;selN=0;dirty=false;
+    setStatus(g.text?'loaded':'new file (not on GitHub yet)','ok');draw();
+  }catch(e){setStatus(e.message,'bad')}
+}
+async function publish(){
+  const errs=validate(cfg);
+  if(errs.length){setStatus(errs[0],'bad');alert(errs.join('\n'));return}
+  if(!S.owner||!S.repo||!S.token){openSettings();setStatus('fill GitHub settings first','bad');return}
+  const body=buildJson(cfg);
+  setStatus('publishing…');$('#bPub').disabled=true;
+  try{
+    let done=false;
+    for(let i=0;i<2&&!done;i++){
+      const cur=await ghGet();
+      const r=await fetch(apiUrl(),{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},hdr()),
+        body:JSON.stringify({message:'Admin: update config',content:b64enc(body),sha:cur.sha||undefined,branch:S.branch})});
+      if(r.ok){sha=(await r.json()).content.sha;done=true}
+      else if(r.status===409||r.status===422)continue;
+      else throw new Error(await errText(r));
+    }
+    if(!done)throw new Error('The file changed on GitHub at the same time. Reload and try again.');
+    dirty=false;setStatus('published ✔ (app picks it up in a few minutes)','ok');
+    if(tab==='raw')draw();
+  }catch(e){setStatus(e.message,'bad')}
+  $('#bPub').disabled=false;
+}
+
+/* ---------- tabs ---------- */
+const TABS=[['themes','Themes'],['news','News'],['update','App update'],['raw','JSON']];
+function drawTabs(){const n=$('#tabs');n.replaceChildren(...TABS.map(([k,l])=>h('button',{class:tab===k?'on':'',onclick:()=>{tab=k;draw()}},l)))}
+function draw(){drawTabs();const v=$('#view');v.replaceChildren();({themes:renderThemes,news:renderNews,update:renderUpdate,raw:renderRaw})[tab](v)}
+
+/* ---------- themes ---------- */
+function dots(t){return h('span',{class:'dots'},['bg','key','accent','active'].map(k=>h('i',{style:'background:'+cssColor(t[k])})))}
+function preview(t){
+  const c=k=>cssColor(t[k]);
+  const key=(txt,bg,fg,cls)=>h('div',{class:'pk'+(cls?' '+cls:''),style:'background:'+bg+';color:'+fg},txt);
+  const letters=(s,pressedAt)=>[...s].map((l,i)=>key(l,i===pressedAt?c('pressed'):c('key'),c('text')));
+  return h('div',{class:'pv',style:'background:'+c('bg')},
+    h('div',{class:'pbar',style:'color:'+c('hint')},'📰  😀  🌐  Aa  ⚙   (hint text)'),
+    h('div',{class:'pr'},letters('qwertyuiop',9)),
+    h('div',{class:'pr'},letters('asdfghjkl')),
+    h('div',{class:'pr'},key('⇧',c('special'),c('text'),'w'),letters('zxcvbn'),key('⌫',c('special'),c('text'),'w')),
+    h('div',{class:'pr'},key('?123',c('special'),c('text'),'w'),key('සිං',c('active'),c('text'),'w'),key('space',c('key'),c('hint'),'sp'),key('⏎',c('accent'),c('text'),'w')));
+}
+function renderThemes(v){
+  const list=h('div',{class:'card'},h('div',{class:'btns',style:'margin:0 0 10px'},h('button',{class:'pri',onclick:()=>{cfg.themes.push(newTheme('New theme '+(cfg.themes.length+1)));selT=cfg.themes.length-1;touch();draw()}},'+ New theme')));
+  cfg.themes.forEach((t,i)=>list.append(h('div',{class:'item'+(i===selT?' on':'')+(t.enabled?'':' off'),onclick:()=>{selT=i;draw()}},dots(t),h('div',{},t.name||'(no name)',h('small',{},t.enabled?'shown in the app':'hidden')))));
+  if(!cfg.themes.length)list.append(h('p',{class:'hint'},'No themes yet. Press “New theme”.'));
+  const t=cfg.themes[selT];const ed=h('div',{class:'card'});
+  if(!t){ed.append(h('p',{class:'hint'},'Pick or create a theme. Themes you publish show up in the app under “New from RIO” in the Theme panel.'))}
+  else{
+    const pv=h('div',{});const upd=()=>{pv.replaceChildren(preview(t));list.querySelectorAll('.item')[selT]?.querySelector('.dots')?.replaceWith(dots(t))};upd();
+    ed.append(pv,
+      h('label',{},'Theme name (max 18 letters)'),h('input',{type:'text',value:t.name,maxlength:18,oninput:e=>{t.name=e.target.value;touch();const it=list.querySelectorAll('.item')[selT];if(it)it.children[1].firstChild.textContent=t.name||'(no name)'}}),
+      h('label',{},'Start from a built-in theme'),
+      h('select',{onchange:e=>{if(!e.target.value)return;KEYS.forEach((k,i)=>{t[k]=PRESETS[e.target.value][i]});touch();draw()}},h('option',{value:''},'— choose —'),Object.keys(PRESETS).map(n=>h('option',{value:n},n))));
+    KEYS.forEach(k=>{
+      const txt=h('input',{type:'text',value:t[k],maxlength:9,spellcheck:'false'});
+      const pick=h('input',{type:'color',value:pickerValue(t[k])});
+      pick.addEventListener('input',()=>{t[k]=withPicker(t[k],pick.value);txt.value=t[k];touch();upd()});
+      txt.addEventListener('input',()=>{t[k]=txt.value.trim();if(HEX.test(t[k]))pick.value=pickerValue(t[k]);txt.style.borderColor=HEX.test(t[k])?'':'var(--bad)';touch();upd()});
+      ed.append(h('div',{class:'crow'},h('span',{},LABELS[k]),pick,txt));
+    });
+    ed.append(h('p',{class:'hint'},'Colours are #RRGGBB. For see-through keys use #AARRGGBB (first two letters = transparency, 99 is about 60%).'),
+      h('label',{class:'chk'},h('input',{type:'checkbox',checked:t.enabled,onchange:e=>{t.enabled=e.target.checked;touch();draw()}}),'Show this theme in the app'),
+      h('div',{class:'btns'},
+        h('button',{onclick:()=>{const c=Object.assign({},t,{name:(t.name+' copy').slice(0,18)});cfg.themes.splice(selT+1,0,c);selT++;touch();draw()}},'Duplicate'),
+        h('button',{class:'del',onclick:()=>{if(confirm('Delete “'+t.name+'”?')){cfg.themes.splice(selT,1);selT=Math.max(0,selT-1);touch();draw()}}},'Delete')));
+  }
+  v.append(h('div',{class:'grid'},list,ed));
+}
+
+/* ---------- news ---------- */
+function renderNews(v){
+  const list=h('div',{class:'card'},h('div',{class:'btns',style:'margin:0 0 10px'},h('button',{class:'pri',onclick:()=>{cfg.news.unshift({id:'n'+Date.now().toString(36),title:'',body:'',date:today(),link:'',pinned:false,enabled:true});selN=0;touch();draw()}},'+ New post')));
+  cfg.news.forEach((n,i)=>list.append(h('div',{class:'item'+(i===selN?' on':'')+(n.enabled?'':' off'),onclick:()=>{selN=i;draw()}},h('div',{},(n.pinned?'📌 ':'')+(n.title||'(no title)'),h('small',{},n.date+(n.enabled?'':' · hidden'))))));
+  if(!cfg.news.length)list.append(h('p',{class:'hint'},'No news yet.'));
+  const n=cfg.news[selN];const ed=h('div',{class:'card'});
+  if(!n){ed.append(h('p',{class:'hint'},'News shows in the keyboard under the 📰 tool. Users get a small pop-up the next time they open the keyboard.'))}
+  else{
+    const pv=h('div',{});const upd=()=>pv.replaceChildren(h('div',{class:'news'},h('b',{},n.title||'(title)'),h('small',{},n.date),h('div',{},n.body),n.link?h('small',{},'Tap to open: '+n.link):null));upd();
+    ed.append(h('label',{},'Preview'),pv,
+      h('label',{},'Title'),h('input',{type:'text',value:n.title,maxlength:80,oninput:e=>{n.title=e.target.value;touch();upd();const it=list.querySelectorAll('.item')[selN];if(it)it.firstChild.firstChild.textContent=(n.pinned?'📌 ':'')+(n.title||'(no title)')}}),
+      h('label',{},'Message'),h('textarea',{value:n.body,maxlength:2000,oninput:e=>{n.body=e.target.value;touch();upd()}}),
+      h('label',{},'Date'),h('input',{type:'date',value:n.date,onchange:e=>{n.date=e.target.value||today();touch();upd()}}),
+      h('label',{},'Link (optional, https only)'),h('input',{type:'text',value:n.link,placeholder:'https://',oninput:e=>{n.link=e.target.value;touch();upd()}}),
+      h('label',{class:'chk'},h('input',{type:'checkbox',checked:n.pinned,onchange:e=>{n.pinned=e.target.checked;touch();draw()}}),'Pin to the top'),
+      h('label',{class:'chk'},h('input',{type:'checkbox',checked:n.enabled,onchange:e=>{n.enabled=e.target.checked;touch();draw()}}),'Visible in the app'),
+      h('div',{class:'btns'},h('button',{class:'del',onclick:()=>{if(confirm('Delete this post?')){cfg.news.splice(selN,1);selN=Math.max(0,selN-1);touch();draw()}}},'Delete')));
+  }
+  v.append(h('div',{class:'grid'},list,ed));
+}
+
+/* ---------- update ---------- */
+function renderUpdate(v){
+  const u=cfg.update||{versionCode:0,versionName:'',message:'',url:''};
+  const set=(k,val)=>{if(!cfg.update)cfg.update={versionCode:0,versionName:'',message:'',url:''};cfg.update[k]=val;touch()};
+  v.append(h('div',{class:'card',style:'max-width:620px'},
+    h('p',{class:'hint'},'Tell users a new APK is ready. The keyboard shows it at the top of the News panel when this number is higher than the installed app’s versionCode.'),
+    h('label',{},'Version code (number, same as versionCode in app/build.gradle.kts)'),h('input',{type:'number',min:0,value:u.versionCode||'',oninput:e=>set('versionCode',parseInt(e.target.value||'0',10)||0)}),
+    h('label',{},'Version name (for example 1.2)'),h('input',{type:'text',value:u.versionName,maxlength:20,oninput:e=>set('versionName',e.target.value)}),
+    h('label',{},'What is new (short)'),h('textarea',{value:u.message,maxlength:300,oninput:e=>set('message',e.target.value)}),
+    h('label',{},'Download link (https only, for example your GitHub Releases page)'),h('input',{type:'text',value:u.url,placeholder:'https://',oninput:e=>set('url',e.target.value)}),
+    h('div',{class:'btns'},h('button',{class:'del',onclick:()=>{cfg.update=null;touch();draw()}},'Remove update notice'))));
+}
+
+/* ---------- raw ---------- */
+function renderRaw(v){
+  const ta=h('textarea',{style:'min-height:340px;font:13px ui-monospace,monospace',value:buildJson(cfg),spellcheck:'false'});
+  v.append(h('div',{class:'card'},
+    h('p',{class:'hint'},'This is exactly what gets saved. You can paste an old config here and press “Use this JSON”.'),ta,
+    h('div',{class:'btns'},
+      h('button',{onclick:()=>{try{cfg=normalize(JSON.parse(ta.value));selT=0;selN=0;touch();draw()}catch(e){alert('That is not valid JSON: '+e.message)}}},'Use this JSON'),
+      h('button',{onclick:()=>{const a=h('a',{href:URL.createObjectURL(new Blob([ta.value],{type:'application/json'})),download:'config.json'});document.body.append(a);a.click();a.remove()}},'Download'))));
+}
+
+/* ---------- settings dialog ---------- */
+function siteUrl(){const p=S.path.replace(/^docs\//,'');return S.owner&&S.repo?'https://'+S.owner+'.github.io/'+S.repo+'/'+p:'(fill owner and repository)'}
+function openSettings(){$('#sOwner').value=S.owner;$('#sRepo').value=S.repo;$('#sBranch').value=S.branch;$('#sPath').value=S.path;$('#sToken').value=S.token;$('#sUrl').textContent=siteUrl();$('#dlg').showModal()}
+['sOwner','sRepo','sPath'].forEach(id=>document.addEventListener('input',e=>{if(e.target.id===id){S.owner=$('#sOwner').value.trim();S.repo=$('#sRepo').value.trim();S.path=$('#sPath').value.trim()||'docs/config.json';$('#sUrl').textContent=siteUrl()}}));
+$('#sSave').onclick=()=>{S.owner=$('#sOwner').value.trim();S.repo=$('#sRepo').value.trim();S.branch=$('#sBranch').value.trim()||'main';S.path=$('#sPath').value.trim()||'docs/config.json';S.token=$('#sToken').value.trim();saveSettings();$('#dlg').close();load()};
+$('#sClose').onclick=()=>$('#dlg').close();
+$('#bSet').onclick=openSettings;$('#bLoad').onclick=load;$('#bPub').onclick=publish;
+window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
+
+loadSettings();draw();
+if(S.owner&&S.repo)load();else{setStatus('set GitHub first','bad');openSettings()}
+</script>
+</body>
+</html>

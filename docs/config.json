@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "updated": "2026-11-15T00:00:00.000Z",
+  "themes": [
+    {
+      "id": "sakura",
+      "name": "Sakura",
+      "enabled": true,
+      "bg": "#2A1220",
+      "key": "#4A2038",
+      "special": "#63304D",
+      "accent": "#FF4D8D",
+      "active": "#B84DFF",
+      "pressed": "#8A3F67",
+      "text": "#FFFFFF",
+      "hint": "#F5A9CC",
+      "snow": "#FFE8F2"
+    }
+  ],
+  "news": [
+    {
+      "id": "welcome",
+      "title": "Welcome to RIO BOARD",
+      "body": "New themes and news will show up here.",
+      "date": "2026-11-15",
+      "link": "",
+      "pinned": false,
+      "enabled": true
+    }
+  ]
+}

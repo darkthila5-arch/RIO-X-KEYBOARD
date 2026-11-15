@@ -50,7 +50,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO, CALC, KEYSTYLE }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO, CALC, KEYSTYLE, NEWS }
 
     private class Key(
         val label: String,
@@ -119,7 +119,7 @@ class RioBoardService : InputMethodService() {
         val snow = Color.parseColor(snowS)
     }
 
-    private val themes = listOf(
+    private val baseThemes = listOf(
         Theme("Dark", "#17181C", "#2B2D35", "#3A3D49", "#3B82F6", "#6D5BD0", "#5A5F73", "#FFFFFF", "#9AA3C0", "#FFFFFF"),
         Theme("Midnight", "#0B1026", "#18204A", "#232C63", "#00B4D8", "#7B2CBF", "#3A4690", "#FFFFFF", "#8FA3FF", "#DDEBFF"),
         Theme("Forest", "#0F1F17", "#1C3A2A", "#26503A", "#2ECC71", "#F39C12", "#3F7A58", "#FFFFFF", "#9BD6B0", "#FFFFFF"),
@@ -140,6 +140,22 @@ class RioBoardService : InputMethodService() {
         Theme("Auto", "#17181C", "#2B2D35", "#3A3D49", "#3B82F6", "#6D5BD0", "#5A5F73", "#FFFFFF", "#9AA3C0", "#FFFFFF"),
         Theme("Material You", "#1C1B1F", "#2B2930", "#49454F", "#6750A4", "#7D5260", "#625B71", "#FFFFFF", "#CAC4D0", "#EADDFF")
     )
+
+    // base themes + the ones you publish from the admin web (RemoteConfig.kt)
+    private var themes: List<Theme> = baseThemes
+    private var remoteCfg: RemoteConfig.Data = RemoteConfig.empty
+
+    private fun rebuildThemes() {
+        themes = baseThemes + remoteCfg.themes.map {
+            Theme(it.name, it.c[0], it.c[1], it.c[2], it.c[3], it.c[4], it.c[5], it.c[6], it.c[7], it.c[8])
+        }
+        val rid = prefs.getString("theme_remote", "") ?: ""
+        themeIdx = if (rid.isNotEmpty()) {
+            val i = remoteCfg.themes.indexOfFirst { it.id == rid }
+            if (i >= 0) baseThemes.size + i else 0
+        } else prefs.getInt("theme", 0).coerceIn(0, baseThemes.size - 1)
+        themeCache = null
+    }
 
     // snow colours: auto (theme), then fixed colours, last = rainbow
     private val snowPalette = listOf("auto", "#FFFFFF", "#7CC8FF", "#FF8AC8", "#FFD54A", "#7CFFB2", "rainbow")
@@ -292,7 +308,8 @@ class RioBoardService : InputMethodService() {
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences("rio_board", MODE_PRIVATE)
-        themeIdx = prefs.getInt("theme", 0).coerceIn(0, themes.size - 1)
+        remoteCfg = RemoteConfig.cached(prefs)
+        rebuildThemes()
         snowMode = prefs.getInt("snow", 2).coerceIn(0, 2)
         lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
         snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
@@ -474,6 +491,16 @@ class RioBoardService : InputMethodService() {
         updateAutoCap(redraw = false)
         render()
         applySnow()
+        announceNews()
+        RemoteConfig.refresh(prefs, false) { d ->
+            remoteCfg = d
+            rebuildThemes()
+            if (::root.isInitialized) {
+                applySnow()
+                render()
+                announceNews()
+            }
+        }
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
@@ -620,6 +647,7 @@ class RioBoardService : InputMethodService() {
             Panel.CRYPTO -> renderCrypto()
             Panel.CALC -> renderCalc()
             Panel.KEYSTYLE -> renderKeyStyle()
+            Panel.NEWS -> renderNews()
             Panel.NONE -> {
                 if (numberRow) root.addView(row(numberKeys()))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -695,6 +723,7 @@ class RioBoardService : InputMethodService() {
             ic("theme", "Theme", 4, IconView.Kind.THEME, { panel == Panel.THEME }) { togglePanel(Panel.THEME) },
             ic("boom", "Boom", 4, IconView.Kind.BOMB, { panel == Panel.BOOM || boomRunning }) { togglePanel(Panel.BOOM) },
             ic("status", "Statuses", 4, IconView.Kind.STATUS, { panel == Panel.STATUS }) { statusItems = null; togglePanel(Panel.STATUS) },
+            tx("news", "News", 4, "\uD83D\uDCF0", 16f, { panel == Panel.NEWS || RemoteConfig.unread(prefs, remoteCfg) > 0 }) { togglePanel(Panel.NEWS) },
             ic("settings", "Settings", 4, IconView.Kind.SETTINGS, { panel == Panel.SETTINGS }) { togglePanel(Panel.SETTINGS) }
         )
     }
@@ -1589,8 +1618,10 @@ class RioBoardService : InputMethodService() {
             }
         }
         val all = themes.withIndex().toList()
-        section("Classic", all.filter { it.value.live == null })
-        section("Live themes (animated)", all.filter { it.value.live != null })
+        val nb = baseThemes.size
+        section("Classic", all.filter { it.index < nb && it.value.live == null })
+        section("Live themes (animated)", all.filter { it.index < nb && it.value.live != null })
+        if (themes.size > nb) section("New from RIO", all.filter { it.index >= nb })
         root.addView(panelBody(grid))
     }
 
@@ -1644,7 +1675,8 @@ class RioBoardService : InputMethodService() {
         box.setOnClickListener {
             feedback(it)
             themeIdx = index
-            prefs.edit().putInt("theme", themeIdx).apply()
+            val rid = if (index >= baseThemes.size) remoteCfg.themes.getOrNull(index - baseThemes.size)?.id ?: "" else ""
+            prefs.edit().putInt("theme", if (rid.isEmpty()) themeIdx else 0).putString("theme_remote", rid).apply()
             applySnow()
             render()
         }
@@ -3592,6 +3624,84 @@ class RioBoardService : InputMethodService() {
             startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (e: Exception) {
         }
+    }
+
+    // ---------- news + update notice from the admin web (RemoteConfig.kt) ----------
+    private fun announceNews() {
+        RemoteConfig.toastWorthy(prefs, remoteCfg)?.let { toast("\uD83D\uDCF0 " + it.title) }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun installedVersionCode(): Int = try {
+        packageManager.getPackageInfo(packageName, 0).versionCode
+    } catch (e: Exception) {
+        Int.MAX_VALUE
+    }
+
+    private fun newsCard(title: String, body: String, date: String, link: String, highlight: Boolean): View {
+        val fg = if (highlight) Color.WHITE else th.text
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = roundBg(if (highlight) th.accent else th.key, 12)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(dp(4), dp(3), dp(4), dp(3)) }
+        }
+        card.addView(TextView(this).apply {
+            text = title
+            setTextColor(fg)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        if (date.isNotEmpty()) card.addView(TextView(this).apply {
+            text = date
+            setTextColor(if (highlight) Color.WHITE else th.hint)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        })
+        if (body.isNotEmpty()) card.addView(TextView(this).apply {
+            text = body
+            setTextColor(fg)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setPadding(0, dp(4), 0, 0)
+        })
+        if (link.isNotEmpty()) {
+            card.addView(TextView(this).apply {
+                text = "Tap to open"
+                setTextColor(if (highlight) Color.WHITE else th.accent)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(0, dp(6), 0, 0)
+            })
+            card.setOnClickListener {
+                feedback(it)
+                try {
+                    startActivity(
+                        Intent(Intent.ACTION_VIEW, android.net.Uri.parse(link)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                } catch (e: Exception) {
+                }
+            }
+        }
+        return card
+    }
+
+    private fun renderNews() {
+        root.addView(panelHeader("News"))
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(2), dp(4), dp(8))
+        }
+        val up = remoteCfg.update
+        if (up != null && up.code > installedVersionCode()) {
+            val head = if (up.name.isNotEmpty()) "Update " + up.name + " is ready" else "Update is ready"
+            list.addView(newsCard(head, up.message, "", up.url, true))
+        }
+        remoteCfg.news.forEach { list.addView(newsCard((if (it.pinned) "\uD83D\uDCCC " else "") + it.title, it.body, it.date, it.link, false)) }
+        if (remoteCfg.news.isEmpty() && (up == null || up.code <= installedVersionCode())) {
+            list.addView(hintText("No news yet."))
+        }
+        root.addView(panelBody(list))
+        RemoteConfig.markSeen(prefs, remoteCfg)
     }
 
     private fun renderSnips() {
