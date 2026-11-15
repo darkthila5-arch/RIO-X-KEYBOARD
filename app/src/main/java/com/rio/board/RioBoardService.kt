@@ -542,6 +542,7 @@ class RioBoardService : InputMethodService() {
             player?.start()
         } catch (e: Exception) {
         }
+        slideIn()
     }
 
     override fun onWindowHidden() {
@@ -654,6 +655,54 @@ class RioBoardService : InputMethodService() {
                 if (siMode) renderSinhala() else renderEnglish()
             }
         }
+        if (panel != lastPanelShown) {
+            lastPanelShown = panel
+            animatePanelIn()
+        }
+    }
+
+    // ---------- smooth motion helpers ----------
+    private var lastPanelShown = Panel.NONE
+    private var lastShowSug = false
+
+    /** Whole keyboard glides up and fades in when it appears. */
+    private fun slideIn() {
+        if (!::root.isInitialized) return
+        root.animate().cancel()
+        root.alpha = 0f
+        root.translationY = dp(20).toFloat()
+        root.animate().alpha(1f).translationY(0f).setDuration(220)
+            .setInterpolator(android.view.animation.DecelerateInterpolator(1.6f)).start()
+    }
+
+    /** Panel content (below the top bar) slides up softly when you open or close a panel. */
+    private fun animatePanelIn() {
+        for (i in 1 until root.childCount) {
+            val c = root.getChildAt(i)
+            c.alpha = 0f
+            c.translationY = dp(14).toFloat()
+            c.animate().alpha(1f).translationY(0f).setDuration(190)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.5f)).start()
+        }
+    }
+
+    /** Little springy pop used when a tool is tapped. */
+    private fun bounce(v: View) {
+        v.animate().cancel()
+        v.scaleX = 0.84f
+        v.scaleY = 0.84f
+        v.animate().scaleX(1f).scaleY(1f).setDuration(240)
+            .setInterpolator(android.view.animation.OvershootInterpolator(3f)).start()
+    }
+
+    /** Tools in the grid pop in one after another. */
+    private fun popIn(v: View, index: Int) {
+        v.alpha = 0f
+        v.scaleX = 0.6f
+        v.scaleY = 0.6f
+        v.animate().alpha(1f).scaleX(1f).scaleY(1f)
+            .setStartDelay(minOf(index * 16L, 380L)).setDuration(240)
+            .setInterpolator(android.view.animation.OvershootInterpolator(1.6f)).start()
     }
 
     /** Top bar: word suggestions while typing, tools otherwise. */
@@ -661,7 +710,13 @@ class RioBoardService : InputMethodService() {
         if (!::barHolder.isInitialized) return
         barHolder.removeAllViews()
         val showSug = suggestions.isNotEmpty() && panel == Panel.NONE && !toolsPinned
-        barHolder.addView(if (showSug) suggestionStrip() else toolbar())
+        val bar = if (showSug) suggestionStrip() else toolbar()
+        barHolder.addView(bar)
+        if (showSug != lastShowSug) {            // soft cross-fade only when the bar changes kind
+            lastShowSug = showSug
+            bar.alpha = 0.35f
+            bar.animate().alpha(1f).setDuration(150).start()
+        }
     }
 
     // =====================================================================
@@ -703,6 +758,13 @@ class RioBoardService : InputMethodService() {
             ic("date", "Date & time", 1, IconView.Kind.CALENDAR) { insertDateTime() },
             ic("calc", "Calculator", 1, IconView.Kind.CALC, { panel == Panel.CALC }) { openCalc() },
             ic("lock", "Secret message", 1, IconView.Kind.LOCK, { panel == Panel.CRYPTO }) { togglePanel(Panel.CRYPTO) },
+            tx("wcount", "Word count", 1, "#W", 13f) { wordCount() },
+            tx("mock", "sPoNgE text", 1, "aBc", 13f) { mockText() },
+            tx("flip", "Upside down", 1, "\u0250q", 14f) { flipText() },
+            tx("spaced", "S P A C E D", 1, "A B", 13f) { spacedText() },
+            tx("clap", "Clap text", 1, "\uD83D\uDC4F", 16f) { clapText() },
+            tx("blank", "Blank message", 1, "[ ]", 13f) { type("\u2800") },
+            tx("divider", "Fancy divider", 1, "\u2501\u2726\u2501", 12f) { type("\u2501\u2501\u2501\u2501 \u2726 \u2501\u2501\u2501\u2501") },
             // 2 edit
             ic("selall", "Select all", 2, IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) },
             ic("copy", "Copy", 2, IconView.Kind.COPY) { menuAction(android.R.id.copy) },
@@ -897,6 +959,7 @@ class RioBoardService : InputMethodService() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), 0, dp(6), dp(12))
         }
+        var popIdx = 0
         toolGroups.forEachIndexed { g, name ->
             box.addView(TextView(this).apply {
                 text = name
@@ -907,7 +970,11 @@ class RioBoardService : InputMethodService() {
             })
             toolList.filter { it.group == g }.chunked(4).forEach { rowTools ->
                 val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-                rowTools.forEach { r.addView(toolCell(it)) }
+                rowTools.forEach { t ->
+                    val cell = toolCell(t)
+                    popIn(cell, popIdx++)
+                    r.addView(cell)
+                }
                 repeat(4 - rowTools.size) {
                     r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
                 }
@@ -1080,6 +1147,7 @@ class RioBoardService : InputMethodService() {
 
     private fun feedback(v: View) {
         if (haptic) Haptics.buzz(this, hapticLevel, v)
+        bounce(v)
     }
 
     // ----- panels -----
@@ -2272,8 +2340,10 @@ class RioBoardService : InputMethodService() {
             return
         }
         val sq = floatArrayOf(1f, 0.97f, 0.94f, 0.88f)[pressLevel]
-        if (down) v.animate().scaleX(sq).scaleY(sq).setDuration(40).start()
-        else v.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
+        if (down) v.animate().scaleX(sq).scaleY(sq).setDuration(50)
+            .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+        else v.animate().scaleX(1f).scaleY(1f).setDuration(180)
+            .setInterpolator(android.view.animation.OvershootInterpolator(2.4f)).start()
     }
 
     /** Light keyboard "tick" on key touch. */
@@ -3220,6 +3290,71 @@ class RioBoardService : InputMethodService() {
             ic.setSelection(end - out.length, end)
         }
         ic.endBatchEdit()
+    }
+
+    /** Runs [fn] on the selected text, or on the current line before the cursor when nothing is selected. */
+    private fun transformText(fn: (String) -> String) {
+        val ic = currentInputConnection ?: return
+        flushSinglish()
+        val sel = ic.getSelectedText(0)?.toString()
+        val hasSel = !sel.isNullOrEmpty()
+        val src: String = if (hasSel) {
+            sel!!
+        } else {
+            val b = ic.getTextBeforeCursor(500, 0)?.toString() ?: return
+            b.substring(b.lastIndexOf('\n') + 1)
+        }
+        if (src.isEmpty()) {
+            toast("Type or select some text first")
+            return
+        }
+        val out = fn(src)
+        ic.beginBatchEdit()
+        if (!hasSel) ic.deleteSurroundingText(src.length, 0)
+        ic.commitText(out, 1)
+        ic.endBatchEdit()
+    }
+
+    private fun wordCount() {
+        val ic = currentInputConnection ?: return
+        flushSinglish()
+        val sel = ic.getSelectedText(0)?.toString()
+        val hasSel = !sel.isNullOrEmpty()
+        val s: String = if (hasSel) sel!! else
+            (ic.getTextBeforeCursor(20000, 0)?.toString() ?: "") + (ic.getTextAfterCursor(20000, 0)?.toString() ?: "")
+        val words = s.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.size
+        toast("$words words \u00B7 ${s.length} characters" + (if (hasSel) " (selected)" else ""))
+    }
+
+    private fun mockText() = transformText { src ->
+        var upper = true
+        val sb = StringBuilder()
+        for (c in src) {
+            if (c.isLetter()) {
+                sb.append(if (upper) c.uppercaseChar() else c.lowercaseChar())
+                upper = !upper
+            } else sb.append(c)
+        }
+        sb.toString()
+    }
+
+    private fun flipText() = transformText { src ->
+        val from = "abcdefghijklmnopqrstuvwxyz"
+        val to = "\u0250q\u0254p\u01DD\u025F\u0183\u0265\u1D09\u027E\u029El\u026Fuodb\u0279s\u0287n\u028C\u028Dx\u028Ez"
+        val sb = StringBuilder()
+        for (c in src.lowercase()) {
+            val i = from.indexOf(c)
+            sb.append(if (i >= 0) to[i] else c)
+        }
+        sb.reverse().toString()
+    }
+
+    private fun spacedText() = transformText { src ->
+        src.split(" ").joinToString("   ") { w -> w.toCharArray().joinToString(" ") }
+    }
+
+    private fun clapText() = transformText { src ->
+        src.trim().split(Regex("\\s+")).joinToString(" \uD83D\uDC4F ") + " \uD83D\uDC4F"
     }
 
     private fun insertDateTime() {
