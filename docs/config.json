@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-11-15T12:41:20.097Z",
+  "updated": "2026-11-15T12:49:00.461Z",
   "themes": [
     {
       "id": "sakura",
@@ -45,6 +45,13 @@
       "name": "nature is so beautiful ___ (1)",
       "file": "bg/nature-is-so-beautiful-1-4mj7.jpg",
       "thumb": "bg/nature-is-so-beautiful-1-4mj7_t.jpg",
+      "enabled": true
+    },
+    {
+      "id": "alice-von-ataraxia-pc-wallpape-zjrn",
+      "name": "alice von ataraxia (pc wallpap",
+      "file": "bg/alice-von-ataraxia-pc-wallpape-zjrn.jpg",
+      "thumb": "bg/alice-von-ataraxia-pc-wallpape-zjrn_t.jpg",
       "enabled": true
     }
   ]
