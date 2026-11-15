@@ -23,8 +23,24 @@ jobs:
         with:
           gradle-version: 8.7
 
-      - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Prepare signing key (optional)
+        env:
+          KS_BASE64: ${{ secrets.KS_BASE64 }}
+        run: |
+          if [ -n "$KS_BASE64" ]; then
+            echo "$KS_BASE64" | base64 -d > "$RUNNER_TEMP/rio.keystore"
+            echo "RIO_KS_FILE=$RUNNER_TEMP/rio.keystore" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build APK
+        env:
+          KS_PASSWORD: ${{ secrets.KS_PASSWORD }}
+        run: |
+          gradle assembleDebug --stacktrace \
+            -PRIO_VERCODE=${{ github.run_number }} \
+            -PRIO_VERNAME=1.0.${{ github.run_number }} \
+            ${RIO_KS_FILE:+-PRIO_KS_FILE=$RIO_KS_FILE} \
+            ${KS_PASSWORD:+-PRIO_KS_PASS=$KS_PASSWORD}
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk RIO-BOARD.apk
