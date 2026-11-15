@@ -455,7 +455,7 @@ object StickerStore {
     fun dir(ctx: Context): File = File(ctx.filesDir, "stickers").also { it.mkdirs() }
 
     fun list(ctx: Context): List<File> =
-        dir(ctx).listFiles { f -> f.isFile && (f.name.endsWith(".png") || f.name.endsWith(".gif")) }
+        dir(ctx).listFiles { f -> f.isFile && !f.name.startsWith("pk_") && (f.name.endsWith(".png") || f.name.endsWith(".gif")) }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
 
     fun mimeOf(f: File): String = if (f.name.endsWith(".gif")) "image/gif" else "image/png"

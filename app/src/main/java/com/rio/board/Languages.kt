@@ -229,9 +229,16 @@ object Languages {
     /** Everything that can be switched on/off in the language button (English is always there). */
     class Entry(val id: String, val native: String, val english: String)
 
-    val entries: List<Entry> =
+    private val allEntries: List<Entry> =
         listOf(Entry("si", "සිංහල", "Sinhala"), Entry("ta", "தமிழ்", "Tamil")) +
             extra.map { Entry(it.id, it.native, it.english) }
+
+    /** Language ids the admin removed from the app (set by RemoteConfig). */
+    @Volatile var hidden: Set<String> = emptySet()
+
+    /** Languages the user can switch on/off (the ones the admin removed are not listed). */
+    val entries: List<Entry>
+        get() = allEntries.filter { it.id !in hidden }
 
     // layoutKind in RioBoardService: 0 Sinhala grid, 1 Wijesekara, 2 Tamil, 3 Easy Sinhala, 4+ = extra[kind - 4]
 
@@ -278,7 +285,7 @@ object Languages {
     private fun off(prefs: SharedPreferences): Set<String> =
         prefs.getString("langs_off", "")!!.split(",").filter { it.isNotEmpty() }.toSet()
 
-    fun isOn(prefs: SharedPreferences, id: String) = id !in off(prefs)
+    fun isOn(prefs: SharedPreferences, id: String) = id !in off(prefs) && id !in hidden
 
     fun toggle(prefs: SharedPreferences, id: String) {
         val o = off(prefs).toMutableSet()

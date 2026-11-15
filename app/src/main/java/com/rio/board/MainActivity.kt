@@ -75,6 +75,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("rio_board", MODE_PRIVATE)
         density = resources.displayMetrics.density
+        RemoteConfig.cached(prefs)           // admin videos / hidden languages must be known before the pages are built
 
         pages.add(homePage())
         pages.add(typePage())
@@ -231,17 +232,25 @@ class MainActivity : Activity() {
     private fun refreshUpdate() {
         if (!::updateBox.isInitialized) return
         updateBox.removeAllViews()
-        val up = RemoteConfig.cached(prefs).update ?: return
+        val cfg = RemoteConfig.cached(prefs)
+        cfg.notice?.let { n ->
+            updateBox.addView(card(title("\u26A0\uFE0F  Notice"), note(n.message)).apply {
+                background = bg(Color.parseColor("#33281A"), 18, Color.parseColor("#FFB020"))
+            })
+        }
+        val required = cfg.minVersion > installedCode()
+        val up = cfg.update ?: return
         if (up.code <= installedCode() || !up.url.startsWith("https://")) return
         val head = if (up.name.isNotEmpty()) "New version ${up.name}" else "New version"
         val c = card(
-            title("\uD83C\uDF89  $head is ready"),
+            title(if (required) "\u26A0\uFE0F  Update required ($head)" else "\uD83C\uDF89  $head is ready"),
             note(if (up.message.isNotEmpty()) up.message else "Tap to download and install."),
             btn("Update now") {
                 startActivity(Intent(this@MainActivity, UpdateActivity::class.java).putExtra("url", up.url))
             }
         )
-        c.background = bg(Color.parseColor("#2A1A33"), 18, PURPLE)
+        c.background = if (required) bg(Color.parseColor("#33181A"), 18, Color.parseColor("#FF5C5C"))
+        else bg(Color.parseColor("#2A1A33"), 18, PURPLE)
         updateBox.addView(c)
     }
 
@@ -736,13 +745,17 @@ class MainActivity : Activity() {
         }
     }
 
+    private val thumbCb: () -> Unit = { refreshVideoStrip() }
+
     override fun onPause() {
         effectPreview?.running = false
+        AnimatedBackgrounds.thumbListeners.remove(thumbCb)
         super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
+        AnimatedBackgrounds.thumbListeners.add(thumbCb)
         updateEffectPreview()
         if (::setupBox.isInitialized) refreshSetup()
         if (::snipList.isInitialized) refreshSnips()

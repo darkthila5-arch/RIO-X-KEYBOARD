@@ -27,6 +27,13 @@ object RemoteConfig {
     class Update(val code: Int, val name: String, val message: String, val url: String)
     /** A wallpaper you added in the admin. file / thumb are paths below the config link, like bg/sunset.jpg */
     class RBg(val id: String, val name: String, val file: String, val thumb: String)
+    /** An animated background you added in the admin (mp4 under vid/). */
+    class RVideo(val id: String, val name: String, val file: String, val thumb: String)
+    /** Extra emoji tab (type "emoji": items are emojis/texts) or sticker tab (type "sticker": items are file paths under packs/). */
+    class Pack(val id: String, val name: String, val icon: String, val type: String, val items: List<String>)
+    /** Effect defaults pushed from the admin. Applied once per [rev]; -1 = leave the user's choice alone. */
+    class Defaults(val rev: Int, val effect: Int, val area: Int, val color: Int)
+    class Notice(val id: String, val message: String)
 
     class Data(
         val themes: List<RTheme>,
@@ -35,7 +42,14 @@ object RemoteConfig {
         val hiddenThemes: Set<String> = emptySet(),      // built-in theme names the admin removed
         val hiddenBg: Set<String> = emptySet(),          // built-in photo files the admin removed
         val hiddenVideos: Set<String> = emptySet(),      // built-in animated ids the admin removed
-        val backgrounds: List<RBg> = emptyList()
+        val backgrounds: List<RBg> = emptyList(),
+        val videos: List<RVideo> = emptyList(),
+        val packs: List<Pack> = emptyList(),
+        val defaults: Defaults? = null,
+        val hiddenLangs: Set<String> = emptySet(),       // language ids the admin removed from the app
+        val disabled: Set<String> = emptySet(),          // keyboard tools switched off by the admin (kill-switch)
+        val minVersion: Int = 0,                         // installed versionCode below this = "update required"
+        val notice: Notice? = null                       // maintenance / info message
     )
 
     val empty = Data(emptyList(), emptyList(), null)
@@ -44,6 +58,9 @@ object RemoteConfig {
     @Volatile var current: Data = empty
 
     private val FILE_OK = Regex("^bg/[A-Za-z0-9._-]{1,80}$")
+    private val VID_OK = Regex("^vid/[A-Za-z0-9._-]{1,80}$")
+    private val PACK_OK = Regex("^packs/[A-Za-z0-9_-]{1,40}/[A-Za-z0-9._-]{1,60}$")
+    private val ID_OK = Regex("[^A-Za-z0-9_-]")
 
     private val COLOR = Regex("^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
     private val KEYS = listOf("bg", "key", "special", "accent", "active", "pressed", "text", "hint", "snow")
@@ -108,10 +125,62 @@ object RemoteConfig {
             bgs.add(RBg(id, b.optString("name", id).take(30), file, thumb))
         }
 
+        // ----- video backgrounds -----
+        val vids = ArrayList<RVideo>()
+        val va = o.optJSONArray("videos") ?: JSONArray()
+        for (i in 0 until minOf(va.length(), 30)) {
+            val b = va.optJSONObject(i) ?: continue
+            if (!b.optBoolean("enabled", true)) continue
+            val file = b.optString("file", "")
+            if (!VID_OK.matches(file) || file.contains("..")) continue
+            val thumb = b.optString("thumb", "")
+            if (!VID_OK.matches(thumb) || thumb.contains("..")) continue
+            val id = b.optString("id", "").trim().take(40).ifEmpty { file }.replace(ID_OK, "_")
+            vids.add(RVideo(id, b.optString("name", id).take(24), file, thumb))
+        }
+
+        // ----- emoji / sticker packs -----
+        val packs = ArrayList<Pack>()
+        val pa = o.optJSONArray("packs") ?: JSONArray()
+        for (i in 0 until minOf(pa.length(), 6)) {
+            val p = pa.optJSONObject(i) ?: continue
+            if (!p.optBoolean("enabled", true)) continue
+            val type = p.optString("type", "emoji")
+            if (type != "emoji" && type != "sticker") continue
+            val items = ArrayList<String>()
+            val ia = p.optJSONArray("items") ?: JSONArray()
+            for (k in 0 until minOf(ia.length(), if (type == "sticker") 40 else 400)) {
+                val it2 = ia.optString(k, "").trim()
+                if (it2.isEmpty()) continue
+                if (type == "sticker") {
+                    if (!PACK_OK.matches(it2) || it2.contains("..")) continue
+                    if (!it2.endsWith(".png") && !it2.endsWith(".gif")) continue
+                    items.add(it2)
+                } else items.add(it2.take(16))
+            }
+            if (items.isEmpty()) continue
+            val id = p.optString("id", "").trim().take(40).ifEmpty { "pack$i" }.replace(ID_OK, "_")
+            packs.add(Pack(id, p.optString("name", id).take(24), p.optString("icon", "\u2B50").take(8).ifEmpty { "\u2B50" }, type, items))
+        }
+
+        // ----- defaults, languages, kill-switch, notice -----
+        val dj = o.optJSONObject("defaults")
+        val defaults = if (dj != null) Defaults(
+            dj.optInt("rev", 0), dj.optInt("effect", -1).coerceIn(-1, 10),
+            dj.optInt("area", -1).coerceIn(-1, 2), dj.optInt("color", -1).coerceIn(-1, 6)
+        ) else null
+        val lj = o.optJSONObject("languages")
+        val fj = o.optJSONObject("flags")
+        val nj = fj?.optJSONObject("notice")
+        val notice = if (nj != null && nj.optBoolean("on", false) && nj.optString("message", "").isNotBlank())
+            Notice(nj.optString("id", "n").take(40), nj.optString("message", "").take(240)) else null
+
         return Data(
             themes, news, update,
             strSet(h?.optJSONArray("themes")), strSet(h?.optJSONArray("backgrounds")), strSet(h?.optJSONArray("videos")),
-            bgs
+            bgs, vids, packs, defaults,
+            strSet(lj?.optJSONArray("hidden")), strSet(fj?.optJSONArray("disabled")),
+            (fj?.optInt("minVersion", 0) ?: 0).coerceAtLeast(0), notice
         )
     }
 
@@ -154,11 +223,41 @@ object RemoteConfig {
         }
     }
 
+    /** Makes a config the one in use (also tells Languages which ones the admin removed). */
+    private fun adopt(d: Data): Data {
+        current = d
+        Languages.hidden = d.hiddenLangs
+        return d
+    }
+
     fun cached(prefs: SharedPreferences): Data = try {
-        parse(prefs.getString("remote_json", "") ?: "")
+        adopt(parse(prefs.getString("remote_json", "") ?: ""))
     } catch (e: Exception) {
         empty
     }
+
+    /**
+     * Effect defaults from the admin: applied once each time the admin raises "rev".
+     * Returns true when something was written (the keyboard then reloads its effect).
+     */
+    fun applyDefaults(prefs: SharedPreferences, d: Data): Boolean {
+        val df = d.defaults ?: return false
+        if (df.rev <= 0 || df.rev <= prefs.getInt("defaults_rev", 0)) return false
+        val e = prefs.edit().putInt("defaults_rev", df.rev)
+        if (df.effect >= 0) e.putInt("effect", df.effect)
+        if (df.area >= 0) {
+            e.putInt("snow", df.area)
+            if (df.area > 0) e.putInt("lastsnow", df.area)
+        }
+        if (df.color >= 0) e.putInt("snowcol", df.color)
+        e.apply()
+        return true
+    }
+
+    fun baseFor(path: String): String = baseUrl() + path
+
+    /** Blocking: downloads a file that lives next to config.json. */
+    fun fetch(path: String, dest: File, maxBytes: Int): Boolean = download(baseFor(path), dest, maxBytes)
 
     /** Checks the link in the background. onChanged runs on the main thread, only when the file really changed. */
     fun refresh(prefs: SharedPreferences, force: Boolean, onChanged: (Data) -> Unit) {
@@ -187,7 +286,7 @@ object RemoteConfig {
                     }
                 }
                 val text = buf.toString("UTF-8")
-                val data = parse(text)                          // throws if it is not valid: then nothing is saved
+                val data = adopt(parse(text))                   // throws if it is not valid: then nothing is saved
                 val changed = text != prefs.getString("remote_json", "")
                 prefs.edit().putString("remote_json", text).putLong("remote_at", now).apply()
                 if (changed) Handler(Looper.getMainLooper()).post { onChanged(data) }

@@ -42,7 +42,17 @@ object AnimatedBackgrounds {
     // stored in filesDir/vids/u_<time>.mp4 (+ .jpg preview, + .txt name)
     const val MAX_BYTES = 60L * 1024 * 1024
 
-    fun isCustom(id: String) = id.startsWith("u_")
+    /** u_ = added by the user on this phone, r_ = added by the admin (downloaded when first used). */
+    fun isCustom(id: String) = id.startsWith("u_") || id.startsWith("r_")
+
+    private fun isRemote(id: String) = id.startsWith("r_")
+
+    private fun remoteVideo(id: String): RemoteConfig.RVideo? =
+        RemoteConfig.current.videos.firstOrNull { "r_" + it.id == id }
+
+    /** Called (main thread) when a preview picture of an admin video finished downloading. */
+    val thumbListeners = HashSet<() -> Unit>()
+    private val thumbBusy = HashSet<String>()
 
     private fun vidDir(ctx: Context): File = File(ctx.filesDir, "vids").apply { mkdirs() }
 
@@ -64,7 +74,8 @@ object AnimatedBackgrounds {
 
     /** Built-in (not hidden by the admin) + the user's own videos. */
     fun all(ctx: Context): List<Pair<String, String>> =
-        items.filter { it.second !in RemoteConfig.current.hiddenVideos } + custom(ctx)
+        items.filter { it.second !in RemoteConfig.current.hiddenVideos } +
+            RemoteConfig.current.videos.map { it.name to ("r_" + it.id) } + custom(ctx)
 
     /**
      * Copies a video the user picked into the app and makes a preview picture.
@@ -142,7 +153,7 @@ object AnimatedBackgrounds {
 
     /** Deletes one of the user's videos; if it is the active background the background is cleared. */
     fun removeCustom(ctx: Context, id: String) {
-        if (!isCustom(id)) return
+        if (!id.startsWith("u_")) return
         val prefs = ctx.getSharedPreferences("rio_board", Context.MODE_PRIVATE)
         val active = prefs.getString("vbg", null) == id
         val dir = vidDir(ctx)
@@ -154,8 +165,26 @@ object AnimatedBackgrounds {
         }
     }
 
-    /** Makes a video the keyboard background (works also when the keyboard has not started yet). */
+    /** Makes a video the keyboard background. Admin videos are downloaded first (max 15 MB, once). */
     fun use(ctx: Context, id: String) {
+        if (isRemote(id) && !videoFile(ctx, id).exists()) {
+            val rv = remoteVideo(id) ?: return
+            val main = Handler(Looper.getMainLooper())
+            Toast.makeText(ctx, "Downloading ${rv.name}...", Toast.LENGTH_SHORT).show()
+            val dest = videoFile(ctx, id)
+            Thread {
+                val ok = RemoteConfig.fetch(rv.file, dest, 15 * 1024 * 1024)
+                main.post {
+                    if (ok) activate(ctx, id)
+                    else Toast.makeText(ctx, "Could not download (no internet?)", Toast.LENGTH_LONG).show()
+                }
+            }.start()
+            return
+        }
+        activate(ctx, id)
+    }
+
+    private fun activate(ctx: Context, id: String) {
         val svc = RioBoardService.instance
         if (svc != null) {
             svc.setVideoBackground(id)
@@ -171,11 +200,31 @@ object AnimatedBackgrounds {
 
     private val thumbs = HashMap<String, Bitmap>()
 
+    /** Preview of an admin video: from the cache, otherwise downloaded in the background (then listeners redraw). */
+    private fun remoteThumb(ctx: Context, id: String): Bitmap? {
+        val rv = remoteVideo(id) ?: return null
+        val f = File(File(ctx.cacheDir, "rvid").apply { mkdirs() }, id + "_" + rv.thumb.hashCode() + ".jpg")
+        if (f.exists()) return BitmapFactory.decodeFile(f.path)
+        val first = synchronized(thumbBusy) { thumbBusy.add(id) }
+        if (first) {
+            val main = Handler(Looper.getMainLooper())
+            Thread {
+                val ok = RemoteConfig.fetch(rv.thumb, f, 400 * 1024)
+                synchronized(thumbBusy) { thumbBusy.remove(id) }
+                if (ok) main.post { thumbListeners.toList().forEach { it() } }
+            }.start()
+        }
+        return null
+    }
+
     fun thumb(ctx: Context, id: String): Bitmap? {
         thumbs[id]?.let { return it }
         return try {
-            val b = if (isCustom(id)) BitmapFactory.decodeFile(File(vidDir(ctx), "$id.jpg").path)
-            else ctx.assets.open("videos/$id.jpg").use { BitmapFactory.decodeStream(it) }
+            val b = when {
+                isRemote(id) -> remoteThumb(ctx, id)
+                isCustom(id) -> BitmapFactory.decodeFile(File(vidDir(ctx), "$id.jpg").path)
+                else -> ctx.assets.open("videos/$id.jpg").use { BitmapFactory.decodeStream(it) }
+            }
             if (b != null) thumbs[id] = b
             b
         } catch (e: Exception) {
@@ -212,7 +261,7 @@ object AnimatedBackgrounds {
                     textSize = 12f
                     setPadding(dp(6), dp(2), dp(6), dp(2))
                 }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
-                if (isCustom(id) && onRemoved != null) {
+                if (id.startsWith("u_") && onRemoved != null) {
                     addView(TextView(ctx).apply {
                         text = "\u2715"
                         gravity = Gravity.CENTER

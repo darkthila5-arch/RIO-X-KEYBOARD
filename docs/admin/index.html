@@ -58,6 +58,21 @@ dialog::backdrop{background:rgba(0,0,0,.5)}
 .bcard input[type=text]{padding:5px 7px;font-size:13px}
 .bcard .chk{margin:4px 0 0;font-size:12px}
 .bcard button{padding:4px 8px;font-size:12px;margin-top:4px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-weight:600;font-size:12px}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin:8px 0 14px}
+.stat{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--card)}
+.stat b{display:block;font-size:22px}.stat span{font-size:12px;color:var(--mut)}
+.bar{height:10px;border-radius:99px;background:var(--line);overflow:hidden;margin:6px 0}
+.bar i{display:block;height:100%;background:var(--acc)}
+.bar.warn i{background:var(--bad)}
+.tools{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:2px 14px}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin-top:8px}
+.pgrid .st{position:relative;border:1px solid var(--line);border-radius:10px;aspect-ratio:1;background:var(--field);overflow:hidden}
+.pgrid .st img{width:100%;height:100%;object-fit:contain}
+.pgrid .st button{position:absolute;top:2px;right:2px;padding:0 6px;font-size:12px;border-radius:99px}
+.emo{font-size:24px;line-height:1.5;word-break:break-all}
 code{background:var(--field);border:1px solid var(--line);border-radius:6px;padding:1px 5px;word-break:break-all}
 </style>
 </head>
@@ -130,7 +145,7 @@ function b64dec(t){const bin=atob(t.replace(/\s/g,''));return new TextDecoder().
 function newTheme(name,preset){const t={id:'',name:name,enabled:true};KEYS.forEach((k,i)=>{t[k]=PRESETS[preset||'Dark'][i]});return t}
 function today(){return new Date().toISOString().slice(0,10)}
 function normalize(o){
-  const c={version:1,updated:'',themes:[],news:[],update:null,hidden:{themes:[],backgrounds:[],videos:[]},backgrounds:[]};
+  const c={version:1,updated:'',themes:[],news:[],update:null,hidden:{themes:[],backgrounds:[],videos:[]},backgrounds:[],videos:[],packs:[],defaults:{rev:0,effect:-1,area:-1,color:-1},languages:{hidden:[]},flags:{disabled:[],minVersion:0,notice:{on:false,id:'',message:''}}};
   if(!o||typeof o!=='object')return c;
   const hs=(o.hidden&&typeof o.hidden==='object')?o.hidden:{};
   ['themes','backgrounds','videos'].forEach(k=>{c.hidden[k]=Array.isArray(hs[k])?hs[k].map(String):[]});
@@ -149,6 +164,25 @@ function normalize(o){
     if(!x||typeof x!=='object')return;
     c.news.push({id:String(x.id||('n'+Math.random().toString(36).slice(2,8))),title:String(x.title||''),body:String(x.body||''),date:String(x.date||today()),link:String(x.link||''),pinned:!!x.pinned,enabled:x.enabled!==false});
   });
+  const toI=(v,d,lo,hi)=>{v=parseInt(v,10);return Number.isFinite(v)?Math.min(hi,Math.max(lo,v)):d};
+  (Array.isArray(o.videos)?o.videos:[]).forEach(b=>{
+    if(!b||typeof b!=='object')return;
+    c.videos.push({id:String(b.id||''),name:String(b.name||'Video'),file:String(b.file||''),thumb:String(b.thumb||''),enabled:b.enabled!==false});
+  });
+  (Array.isArray(o.packs)?o.packs:[]).forEach(p=>{
+    if(!p||typeof p!=='object')return;
+    c.packs.push({id:String(p.id||''),name:String(p.name||'Pack'),icon:String(p.icon||'⭐'),type:p.type==='sticker'?'sticker':'emoji',enabled:p.enabled!==false,items:Array.isArray(p.items)?p.items.map(String):[]});
+  });
+  if(o.defaults&&typeof o.defaults==='object'){
+    c.defaults={rev:toI(o.defaults.rev,0,0,1000000),effect:toI(o.defaults.effect,-1,-1,10),area:toI(o.defaults.area,-1,-1,2),color:toI(o.defaults.color,-1,-1,6)};
+  }
+  if(o.languages&&Array.isArray(o.languages.hidden))c.languages.hidden=o.languages.hidden.map(String);
+  if(o.flags&&typeof o.flags==='object'){
+    if(Array.isArray(o.flags.disabled))c.flags.disabled=o.flags.disabled.map(String);
+    c.flags.minVersion=toI(o.flags.minVersion,0,0,1000000);
+    const n=o.flags.notice;
+    if(n&&typeof n==='object')c.flags.notice={on:!!n.on,id:String(n.id||''),message:String(n.message||'')};
+  }
   if(o.update&&typeof o.update==='object'&&Number(o.update.versionCode)>0){
     c.update={versionCode:Number(o.update.versionCode)|0,versionName:String(o.update.versionName||''),message:String(o.update.message||''),url:String(o.update.url||'')};
   }
@@ -173,6 +207,21 @@ function validate(c){
     if(!b.name.trim())errs.push('Background '+(i+1)+': name is empty');
     if(!/^bg\/[A-Za-z0-9._-]{1,80}$/.test(b.file)||b.file.includes('..'))errs.push('Background "'+b.name+'": file path is not valid');
   });
+  c.videos.forEach((b,i)=>{
+    if(!b.name.trim())errs.push('Video '+(i+1)+': name is empty');
+    if(!/^vid\/[A-Za-z0-9._-]{1,80}$/.test(b.file)||b.file.includes('..'))errs.push('Video "'+b.name+'": file path is not valid');
+  });
+  if(c.videos.length>30)errs.push('Videos: at most 30');
+  c.packs.forEach((p,i)=>{
+    if(!p.name.trim())errs.push('Pack '+(i+1)+': name is empty');
+    if(!p.icon.trim())errs.push('Pack "'+p.name+'": icon is empty');
+    if(p.enabled&&!p.items.length)errs.push('Pack "'+p.name+'": it has no items (add some or hide the pack)');
+    if(p.items.length>(p.type==='sticker'?40:400))errs.push('Pack "'+p.name+'": too many items');
+  });
+  if(c.packs.filter(p=>p.enabled).length>4)errs.push('Packs: the keyboard shows at most 4 packs. Hide some.');
+  if(c.languages.hidden.length>=8)errs.push('Languages: keep at least one language available');
+  if(c.flags.notice.on&&!c.flags.notice.message.trim())errs.push('Notice: write a message or switch it off');
+  if(c.flags.notice.message.length>240)errs.push('Notice: at most 240 letters');
   if(c.update){
     if(!(c.update.versionCode>0))errs.push('Update: version code must be a number above 0');
     if(c.update.url&&!/^https:\/\//i.test(c.update.url))errs.push('Update: link must start with https://');
@@ -182,7 +231,12 @@ function validate(c){
 function buildJson(c){
   const out={version:1,updated:new Date().toISOString(),themes:[],news:[],update:c.update,
     hidden:{themes:c.hidden.themes.slice(),backgrounds:c.hidden.backgrounds.slice(),videos:c.hidden.videos.slice()},
-    backgrounds:c.backgrounds.map(b=>({id:b.id,name:b.name.trim(),file:b.file,thumb:b.thumb,enabled:!!b.enabled}))};
+    backgrounds:c.backgrounds.map(b=>({id:b.id,name:b.name.trim(),file:b.file,thumb:b.thumb,enabled:!!b.enabled})),
+    videos:c.videos.map(b=>({id:b.id,name:b.name.trim(),file:b.file,thumb:b.thumb,enabled:!!b.enabled})),
+    packs:c.packs.map(p=>({id:p.id,name:p.name.trim(),icon:p.icon.trim(),type:p.type,enabled:!!p.enabled,items:p.items.slice()})),
+    defaults:{rev:c.defaults.rev,effect:c.defaults.effect,area:c.defaults.area,color:c.defaults.color},
+    languages:{hidden:c.languages.hidden.slice()},
+    flags:{disabled:c.flags.disabled.slice(),minVersion:c.flags.minVersion|0,notice:{on:!!c.flags.notice.on,id:c.flags.notice.id,message:c.flags.notice.message.trim()}}};
   const ids=new Set();
   c.themes.forEach(t=>{
     let id=slug(t.name),n=2;while(ids.has(id)){id=slug(t.name)+'-'+(n++)}ids.add(id);
@@ -205,6 +259,8 @@ const S={owner:'',repo:'',branch:'main',path:'docs/config.json',token:''};
 let cfg=normalize(null),sha=null,dirty=false,tab='themes',selT=0,selN=0,selB=null;
 const PREVIEWS=new Map();  // id -> local preview so a new image shows at once
 const PENDING=new Map();   // new background images waiting for Publish: id -> {full,thumb,url}
+const UPLOADS=new Map();   // other new files waiting for Publish (videos, pack stickers): path below docs/ -> base64
+let selP=0;
 let DELETE_FILES=[];        // image files in the repo to remove on Publish
 const $=s=>document.querySelector(s);
 
@@ -261,7 +317,7 @@ async function load(){
   try{
     const g=await ghGet();sha=g.sha;
     cfg=normalize(g.text?JSON.parse(g.text):null);
-    PENDING.clear();DELETE_FILES=[];
+    PENDING.clear();UPLOADS.clear();DELETE_FILES=[];selP=0;
     selT=0;selN=0;selB=null;dirty=false;
     setStatus(g.text?'loaded':'new file (not on GitHub yet)','ok');draw();
   }catch(e){setStatus(e.message,'bad')}
@@ -283,6 +339,12 @@ async function publish(){
       await ghPutFile(base+b.thumb,p.thumb,'Admin: add background thumbnail');
       PENDING.delete(b.id);
     }
+    let u=0;
+    for(const [path,b64] of [...UPLOADS]){
+      u++;setStatus('uploading files ('+u+'/'+UPLOADS.size+')…');
+      await ghPutFile(base+path,b64,'Admin: add '+path);
+      UPLOADS.delete(path);
+    }
     for(const f of DELETE_FILES){try{await ghDeleteFile(f)}catch(e){}}
     DELETE_FILES=[];
     setStatus('saving config…');
@@ -303,9 +365,9 @@ async function publish(){
 }
 
 /* ---------- tabs ---------- */
-const TABS=[['themes','Themes'],['bg','Backgrounds'],['news','News'],['update','App update'],['raw','JSON']];
+const TABS=[['themes','Themes'],['bg','Backgrounds'],['vid','Videos'],['packs','Packs'],['ctl','Controls'],['news','News'],['update','App update'],['stats','Stats'],['raw','JSON']];
 function drawTabs(){const n=$('#tabs');n.replaceChildren(...TABS.map(([k,l])=>h('button',{class:tab===k?'on':'',onclick:()=>{tab=k;draw()}},l)))}
-function draw(){drawTabs();const v=$('#view');v.replaceChildren();({themes:renderThemes,bg:renderBg,news:renderNews,update:renderUpdate,raw:renderRaw})[tab](v)}
+function draw(){drawTabs();const v=$('#view');v.replaceChildren();({themes:renderThemes,bg:renderBg,vid:renderVideos,packs:renderPacks,ctl:renderControls,news:renderNews,update:renderUpdate,stats:renderStats,raw:renderRaw})[tab](v)}
 
 /* ---------- themes ---------- */
 function dots(t){return h('span',{class:'dots'},['bg','key','accent','active'].map(k=>h('i',{style:'background:'+cssColor(t[k])})))}
@@ -416,6 +478,194 @@ function renderBg(v){
     h('div',{class:'sec'},'Added by you'),cfg.backgrounds.length?own:h('p',{class:'hint'},'Nothing yet.'),
     h('div',{class:'sec'},'Built-in photos (untick = remove from the app)'),photos,
     h('div',{class:'sec'},'Built-in animated backgrounds'),vids));
+}
+
+/* ---------- videos ---------- */
+const MAX_VIDEO=12*1024*1024;
+function videoThumb(file){
+  return new Promise((res,rej)=>{
+    const url=URL.createObjectURL(file);const v=document.createElement('video');
+    v.muted=true;v.playsInline=true;v.preload='metadata';v.src=url;
+    const fail=m=>{URL.revokeObjectURL(url);rej(new Error(m))};
+    v.onerror=()=>fail('this browser can not read that video (use an mp4)');
+    v.onloadedmetadata=()=>{v.currentTime=Math.min(1,(v.duration||2)/2)};
+    v.onseeked=()=>{
+      try{
+        const sc=Math.min(1,360/(v.videoWidth||360));const c=document.createElement('canvas');
+        c.width=Math.max(1,Math.round(v.videoWidth*sc));c.height=Math.max(1,Math.round(v.videoHeight*sc));
+        c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+        c.toBlob(b=>{URL.revokeObjectURL(url);b?res(b):rej(new Error('could not make a preview picture'))},'image/jpeg',.8);
+      }catch(e){fail(e.message)}
+    };
+  });
+}
+async function addVideos(files){
+  for(const f of files){
+    try{
+      if(f.size>MAX_VIDEO)throw new Error('it is bigger than 12 MB. Use a shorter or smaller clip (loops best at 5–10 seconds).');
+      setStatus('preparing video…');
+      const thumb=await videoThumb(f);
+      const id=uniqueId((f.name||'video').replace(/\.[^.]+$/,''),new Set(cfg.videos.map(b=>b.id)))+'-'+Date.now().toString(36).slice(-4);
+      const ext=((/\.(mp4|webm|3gp)$/i.exec(f.name)||[null,'mp4'])[1]).toLowerCase();
+      const file='vid/'+id+'.'+ext,tfile='vid/'+id+'_t.jpg';
+      cfg.videos.push({id:id,name:(f.name||'Video').replace(/\.[^.]+$/,'').slice(0,24),file:file,thumb:tfile,enabled:true});
+      PREVIEWS.set(id,URL.createObjectURL(thumb));PREVIEWS.set(id+':v',URL.createObjectURL(f));
+      UPLOADS.set(file,await blobB64(f));UPLOADS.set(tfile,await blobB64(thumb));
+    }catch(e){alert('Could not use “'+f.name+'”: '+e.message)}
+  }
+  touch();draw();
+}
+function dropUpload(path){if(UPLOADS.has(path))UPLOADS.delete(path);else DELETE_FILES.push(dirOf(S.path)+path)}
+function renderVideos(v){
+  const own=h('div',{class:'bgrid'});
+  cfg.videos.forEach((b,i)=>{
+    const src=PREVIEWS.get(b.id)||('../'+b.thumb);
+    const nm=h('input',{type:'text',value:b.name,maxlength:24,oninput:e=>{b.name=e.target.value;touch()}});
+    const card=bgCard(src,b.name,b.enabled,on=>{b.enabled=on;touch();draw()},h('div',{},nm,h('div',{class:'tag'},UPLOADS.has(b.file)?'new, uploads when you press Publish':'published')));
+    card.querySelector('.bi').append(
+      h('button',{onclick:()=>{const u=PREVIEWS.get(b.id+':v')||('../'+b.file);window.open(u,'_blank')}},'▶ Play'),' ',
+      h('button',{class:'del',onclick:()=>{
+        if(!confirm('Delete “'+b.name+'”?'))return;
+        dropUpload(b.file);dropUpload(b.thumb);cfg.videos.splice(i,1);touch();draw()}},'Delete'));
+    own.append(card);
+  });
+  const pick=h('input',{type:'file',accept:'video/mp4,video/webm,video/3gpp,video/*',multiple:true,style:'display:none',onchange:e=>{addVideos([...e.target.files]);e.target.value=''}});
+  v.append(h('div',{class:'card'},
+    h('div',{class:'btns',style:'margin:0 0 6px'},h('button',{class:'pri',onclick:()=>pick.click()},'+ Add video'),pick),
+    h('p',{class:'hint'},'Videos play muted and loop behind the keys. Max 12 MB each, short clips (5–10 s, portrait or landscape) work best. They are saved in your repo under docs/vid when you press Publish. The keyboard downloads a video only when a user picks it.'),
+    h('div',{class:'sec'},'Added by you ('+cfg.videos.length+'/30)'),cfg.videos.length?own:h('p',{class:'hint'},'Nothing yet.'),
+    h('p',{class:'hint'},'The built-in animated backgrounds can be hidden in the Backgrounds tab.')));
+}
+
+/* ---------- emoji & sticker packs ---------- */
+function packId(t){return t+'-'+Math.random().toString(36).slice(2,7)}
+function newPack(type){return{id:packId(type==='sticker'?'stk':'emo'),name:type==='sticker'?'My stickers':'My emoji',icon:type==='sticker'?'🖼':'⭐',type:type,enabled:true,items:[]}}
+async function toPng(file,max){
+  const bmp=await createImageBitmap(file);const sc=Math.min(1,max/bmp.width,max/bmp.height);
+  const c=document.createElement('canvas');c.width=Math.max(1,Math.round(bmp.width*sc));c.height=Math.max(1,Math.round(bmp.height*sc));
+  c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
+  return new Promise((res,rej)=>c.toBlob(b=>b?res(b):rej(new Error('could not convert image')),'image/png'));
+}
+async function stickerBlob(f){
+  if(/gif$/i.test(f.type)||/\.gif$/i.test(f.name)){if(f.size>600*1024)throw new Error('the GIF is bigger than 600 KB');return{blob:f,ext:'gif'}}
+  for(const px of [512,384,256]){const b=await toPng(f,px);if(b.size<=600*1024)return{blob:b,ext:'png'}}
+  throw new Error('the picture is too detailed (over 600 KB)');
+}
+async function addStickers(p,files){
+  for(const f of files){
+    if(p.items.length>=40){alert('A sticker pack can hold 40 stickers.');break}
+    try{
+      setStatus('preparing stickers…');
+      const r=await stickerBlob(f);
+      const path='packs/'+p.id+'/'+Date.now().toString(36)+Math.random().toString(36).slice(2,5)+'.'+r.ext;
+      p.items.push(path);PREVIEWS.set(path,URL.createObjectURL(r.blob));UPLOADS.set(path,await blobB64(r.blob));
+    }catch(e){alert('Could not use “'+f.name+'”: '+e.message)}
+  }
+  touch();draw();
+}
+function removePackItem(p,i){dropUpload(p.items[i]);p.items.splice(i,1);touch();draw()}
+function renderPacks(v){
+  const list=h('div',{class:'card'},h('div',{class:'btns',style:'margin:0 0 6px'},
+    h('button',{class:'pri',onclick:()=>{cfg.packs.push(newPack('emoji'));selP=cfg.packs.length-1;touch();draw()}},'+ Emoji pack'),
+    h('button',{class:'pri',onclick:()=>{cfg.packs.push(newPack('sticker'));selP=cfg.packs.length-1;touch();draw()}},'+ Sticker pack')));
+  cfg.packs.forEach((p,i)=>list.append(h('div',{class:'item'+(i===selP?' on':'')+(p.enabled?'':' off'),onclick:()=>{selP=i;draw()}},
+    h('span',{style:'font-size:22px'},p.icon),h('div',{},p.name||'(no name)',h('small',{},(p.type==='sticker'?'Stickers':'Emoji')+' · '+p.items.length+(p.enabled?'':' · hidden'))))));
+  if(!cfg.packs.length)list.append(h('p',{class:'hint'},'No packs yet. A pack becomes a new tab in the keyboard’s emoji panel (up to 4 packs).'));
+  const p=cfg.packs[selP];const ed=h('div',{class:'card'});
+  if(!p){ed.append(h('p',{class:'hint'},'Pick a pack on the left or add one. Emoji packs hold emojis or short texts (kaomoji, symbols). Sticker packs hold pictures (PNG/GIF) that users send like stickers.'))}
+  else{
+    ed.append(
+      h('label',{},'Pack name'),h('input',{type:'text',value:p.name,maxlength:24,oninput:e=>{p.name=e.target.value;touch();const it=list.querySelectorAll('.item')[selP];if(it)it.children[1].firstChild.textContent=p.name||'(no name)'}}),
+      h('label',{},'Tab icon (one emoji or letter, shown in the emoji panel)'),h('input',{type:'text',value:p.icon,maxlength:4,oninput:e=>{p.icon=e.target.value;touch()}}),
+      h('label',{class:'chk'},h('input',{type:'checkbox',checked:p.enabled,onchange:e=>{p.enabled=e.target.checked;touch();draw()}}),'Show this pack in the app'));
+    if(p.type==='emoji'){
+      const prev=h('div',{class:'emo'},p.items.join(' '));
+      const cnt=h('div',{class:'hint'},p.items.length+' / 400');
+      ed.append(h('label',{},'Emojis / texts (separate with spaces or new lines, max 16 letters each)'),
+        h('textarea',{value:p.items.join(' '),style:'min-height:130px',oninput:e=>{p.items=e.target.value.split(/\s+/).filter(Boolean).map(x=>x.slice(0,16)).slice(0,400);prev.textContent=p.items.join(' ');cnt.textContent=p.items.length+' / 400';touch()}}),cnt,
+        h('label',{},'Preview'),prev);
+    }else{
+      const pick=h('input',{type:'file',accept:'image/*',multiple:true,style:'display:none',onchange:e=>{addStickers(p,[...e.target.files]);e.target.value=''}});
+      const g=h('div',{class:'pgrid'},p.items.map((path,i)=>h('div',{class:'st'},h('img',{src:PREVIEWS.get(path)||('../'+path),alt:'',loading:'lazy'}),h('button',{class:'del',onclick:()=>removePackItem(p,i)},'✕'))));
+      ed.append(h('div',{class:'btns'},h('button',{class:'pri',onclick:()=>pick.click()},'+ Add pictures'),pick),
+        h('p',{class:'hint'},'Pictures are converted to PNG (max 512 px, under 600 KB). GIFs stay animated (under 600 KB). Max 40 per pack. Saved under docs/packs when you press Publish.'),
+        p.items.length?g:h('p',{class:'hint'},'No stickers yet.'),h('div',{class:'hint'},p.items.length+' / 40'));
+    }
+    ed.append(h('div',{class:'btns'},h('button',{class:'del',onclick:()=>{
+      if(!confirm('Delete the pack “'+p.name+'”?'))return;
+      if(p.type==='sticker')p.items.forEach(dropUpload);
+      cfg.packs.splice(selP,1);selP=Math.max(0,selP-1);touch();draw()}},'Delete pack')));
+  }
+  v.append(h('div',{class:'grid'},list,ed));
+}
+
+/* ---------- controls: effect + language defaults, kill-switch, notice ---------- */
+const TOOLS=[['paste','Paste'],['clip','Clipboard'],['sticker','Stickers & GIF maker'],['voice','Voice typing'],['snips','Shortcuts'],['fonts','Fonts & styles'],['calc','Calculator'],['lock','Secret message'],['date','Date & time'],['bg','Backgrounds'],['effects','Effects'],['theme','Themes'],['keystyle','Key style'],['boom','Boom'],['status','Status saver']];
+const LANGS=[['si','සිංහල Sinhala'],['ta','தமிழ் Tamil'],['hi','हिन्दी Hindi'],['te','తెలుగు Telugu'],['ml','മലയാളം Malayalam'],['kn','ಕನ್ನಡ Kannada'],['bn','বাংলা Bengali'],['ar','العربية Arabic']];
+const EFFECTS=['Snow ❄','Water drops 💧','Leaves 🍃','Flowers 🌸','Smoke 💨','Fire 🔥','Hearts ❤','Rain 🌧','Fireflies ✨','Bubbles ○','Stars ⭐'];
+const AREAS=['Off','Keyboard only','Full screen'];
+const COLOURS=['Auto (natural look)','White','Blue','Pink','Yellow','Green','Rainbow'];
+function sel(options,value,onchange,keepLabel){
+  return h('select',{onchange:e=>onchange(parseInt(e.target.value,10))},h('option',{value:-1,selected:value===-1},keepLabel),options.map((o,i)=>h('option',{value:i,selected:value===i},o)));
+}
+function toggleIn(arr,key,on){const i=arr.indexOf(key);if(on&&i<0)arr.push(key);if(!on&&i>=0)arr.splice(i,1)}
+function renderControls(v){
+  const d=cfg.defaults,f=cfg.flags;
+  const eff=h('div',{class:'card'},
+    h('div',{class:'sec',style:'margin-top:0'},'🎛 Effect defaults'),
+    h('p',{class:'hint'},'Choose how the keyboard effect looks for everyone. “Push” sends it once: users can still change it afterwards in the app. Push again later to reset everyone.'),
+    h('label',{},'Effect'),sel(EFFECTS,d.effect,x=>{d.effect=x;touch()},'Do not change'),
+    h('label',{},'Where'),sel(AREAS,d.area,x=>{d.area=x;touch()},'Do not change'),
+    h('label',{},'Colour'),sel(COLOURS,d.color,x=>{d.color=x;touch()},'Do not change'),
+    h('div',{class:'btns'},h('button',{class:'pri',onclick:()=>{
+      if(d.effect<0&&d.area<0&&d.color<0){alert('Choose at least one thing to push.');return}
+      d.rev=(d.rev|0)+1;touch();draw();setStatus('push #'+d.rev+' ready – press Publish','bad')}},'Push to everyone'),
+      h('span',{class:'hint'},'Push number now: '+(d.rev|0))));
+  const lang=h('div',{class:'card'},
+    h('div',{class:'sec',style:'margin-top:0'},'🌐 Languages'),
+    h('p',{class:'hint'},'Untick a language to remove it from the keyboard and from the app’s Languages list. English is always there.'),
+    h('div',{class:'tools'},LANGS.map(([id,n])=>h('label',{class:'chk'},h('input',{type:'checkbox',checked:!cfg.languages.hidden.includes(id),onchange:e=>{toggleIn(cfg.languages.hidden,id,!e.target.checked);touch()}}),n))));
+  const kill=h('div',{class:'card'},
+    h('div',{class:'sec',style:'margin-top:0'},'⛔ Kill-switch (turn tools off)'),
+    h('p',{class:'hint'},'Untick a tool to hide it from the keyboard for everyone (for example if it has a bug). Tick it again to bring it back. Settings, Emoji, Language, Singlish and News can not be switched off.'),
+    h('div',{class:'tools'},TOOLS.map(([id,n])=>h('label',{class:'chk'},h('input',{type:'checkbox',checked:!f.disabled.includes(id),onchange:e=>{toggleIn(f.disabled,id,!e.target.checked);touch()}}),n))));
+  const nt=f.notice;
+  const note=h('div',{class:'card'},
+    h('div',{class:'sec',style:'margin-top:0'},'📢 Notice & minimum version'),
+    h('label',{class:'chk'},h('input',{type:'checkbox',checked:nt.on,onchange:e=>{nt.on=e.target.checked;if(!nt.id)nt.id='n'+Date.now().toString(36);touch()}}),'Show a notice (maintenance, warning, info)'),
+    h('label',{},'Message (max 240 letters). Shown once as a pop-up on the keyboard, and as a card in the app and the News panel'),
+    h('textarea',{value:nt.message,maxlength:240,style:'min-height:80px',oninput:e=>{nt.message=e.target.value;nt.id='n'+Date.now().toString(36);touch()}}),
+    h('label',{},'Minimum app version code (0 = off). Older apps get an “Update required” message'),
+    h('input',{type:'number',min:0,value:f.minVersion||0,oninput:e=>{f.minVersion=Math.max(0,parseInt(e.target.value||'0',10)||0);touch()}}),
+    h('p',{class:'hint'},'Set the update link in the “App update” tab so the message has a button to update. The keyboard keeps working, it only reminds the user.'));
+  v.append(h('div',{style:'display:grid;gap:14px;max-width:760px'},eff,lang,kill,note));
+}
+
+/* ---------- stats ---------- */
+async function ghJson(url){const r=await fetch(url,{headers:hdr(),cache:'no-store'});if(!r.ok)throw new Error(await errText(r));return r.json()}
+function stat(n,l){return h('div',{class:'stat'},h('b',{},String(n)),h('span',{},l))}
+async function renderStats(v){
+  const size=new Blob([buildJson(cfg)]).size,pct=Math.min(100,Math.round(size/2621.44));
+  const box=h('div',{class:'card'});
+  box.append(h('div',{class:'sec',style:'margin-top:0'},'config.json'),
+    h('div',{class:'stats'},stat(cfg.themes.length,'themes'),stat(cfg.news.length,'news posts'),stat(cfg.backgrounds.length,'photo backgrounds'),stat(cfg.videos.length,'video backgrounds'),stat(cfg.packs.length,'packs'),stat(cfg.flags.disabled.length,'tools switched off')),
+    h('div',{},'Size: '+(size/1024).toFixed(1)+' KB of 256 KB allowed'),h('div',{class:'bar'+(pct>85?' warn':'')},h('i',{style:'width:'+pct+'%'})),
+    h('p',{class:'hint'},'The keyboard ignores a config.json bigger than 256 KB. Pictures and videos are separate files and do not count.'));
+  const dl=h('div',{class:'card',style:'margin-top:14px'},h('div',{class:'sec',style:'margin-top:0'},'Downloads (GitHub releases)'),h('p',{class:'hint'},'Loading…'));
+  v.append(box,dl);
+  try{
+    if(!S.owner||!S.repo)throw new Error('Set GitHub first (⚙ GitHub).');
+    const api='https://api.github.com/repos/'+encodeURIComponent(S.owner)+'/'+encodeURIComponent(S.repo);
+    const [repo,rels]=await Promise.all([ghJson(api),ghJson(api+'/releases?per_page=50')]);
+    if(tab!=='stats')return;
+    const rows=rels.map(r=>{const apk=(r.assets||[]).find(a=>/\.apk$/i.test(a.name));return{tag:r.tag_name,date:(r.published_at||'').slice(0,10),n:apk?apk.download_count:0}});
+    const total=rows.reduce((a,b)=>a+b.n,0);
+    const best=rows.slice().sort((a,b)=>b.n-a.n)[0];
+    dl.replaceChildren(h('div',{class:'sec',style:'margin-top:0'},'Downloads (GitHub releases)'),
+      h('div',{class:'stats'},stat(total,'APK downloads'),stat(rows.length,'releases'),stat(rows[0]?rows[0].tag:'–','latest'),stat(best&&best.n?best.tag:'–','most downloaded'),stat(repo.stargazers_count,'stars'),stat(repo.forks_count,'forks')),
+      rows.length?h('table',{},h('thead',{},h('tr',{},h('th',{},'Release'),h('th',{},'Date'),h('th',{},'Downloads'))),h('tbody',{},rows.map(r=>h('tr',{},h('td',{},r.tag),h('td',{},r.date),h('td',{},String(r.n)))))):h('p',{class:'hint'},'No releases yet.'),
+      h('p',{class:'hint'},'These are the numbers GitHub counts for the APK file. Updates inside the app are downloads too. The keyboard never sends anything about its users.'));
+  }catch(e){dl.replaceChildren(h('div',{class:'sec',style:'margin-top:0'},'Downloads (GitHub releases)'),h('p',{class:'hint'},e.message))}
 }
 
 /* ---------- news ---------- */

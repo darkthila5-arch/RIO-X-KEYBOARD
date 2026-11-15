@@ -305,11 +305,18 @@ class RioBoardService : InputMethodService() {
         listOf("\u0DD9", "\u0DDA", "\u0DDB", "\u0DDC", "\u0DDD", "\u0DDE", "\u0D82", "\u0D83", "\u0DCA\u200D\u0DBB", "\u0DCA\u200D\u0DBA")
     )
 
+    // admin video previews finished downloading -> redraw the open panel
+    private val thumbListener: () -> Unit = {
+        if (::root.isInitialized && (panel == Panel.BACKGROUND || panel == Panel.SETTINGS)) render()
+    }
+
     // ---------- lifecycle ----------
     override fun onCreate() {
         super.onCreate()
         prefs = getSharedPreferences("rio_board", MODE_PRIVATE)
         remoteCfg = RemoteConfig.cached(prefs)
+        RemoteConfig.applyDefaults(prefs, remoteCfg)
+        AnimatedBackgrounds.thumbListeners.add(thumbListener)
         rebuildThemes()
         snowMode = prefs.getInt("snow", 2).coerceIn(0, 2)
         lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
@@ -381,6 +388,7 @@ class RioBoardService : InputMethodService() {
         hideAlts()
         releasePlayer()
         cm.removePrimaryClipChangedListener(clipListener)
+        AnimatedBackgrounds.thumbListeners.remove(thumbListener)
         if (instance === this) instance = null
         super.onDestroy()
     }
@@ -496,6 +504,13 @@ class RioBoardService : InputMethodService() {
         RemoteConfig.refresh(prefs, false) { d ->
             remoteCfg = d
             rebuildThemes()
+            if (RemoteConfig.applyDefaults(prefs, d)) {
+                snowMode = prefs.getInt("snow", 2).coerceIn(0, 2)
+                lastSnow = prefs.getInt("lastsnow", 2).coerceIn(1, 2)
+                snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
+                effectIdx = prefs.getInt("effect", 0).coerceIn(0, EffectView.Type.values().size - 1)
+            }
+            loadPinned()
             if (::root.isInitialized) {
                 applySnow()
                 render()
@@ -733,7 +748,7 @@ class RioBoardService : InputMethodService() {
     private val defaultPinned = listOf("singlish", "emoji", "sticker", "clip", "fonts", "voice")
     private var pinned = ArrayList<String>(defaultPinned)
 
-    private val toolList: List<Tool> by lazy {
+    private val allTools: List<Tool> by lazy {
         fun ic(id: String, label: String, g: Int, k: IconView.Kind, active: () -> Boolean = { false }, a: () -> Unit) =
             Tool(id, label, g, k, null, 0f, active, a)
         fun tx(id: String, label: String, g: Int, t: String, sp: Float, active: () -> Boolean = { false }, a: () -> Unit) =
@@ -790,6 +805,12 @@ class RioBoardService : InputMethodService() {
             ic("settings", "Settings", 4, IconView.Kind.SETTINGS, { panel == Panel.SETTINGS }) { togglePanel(Panel.SETTINGS) }
         )
     }
+
+    /** All tools except the ones the admin switched off (RemoteConfig flags.disabled). Settings/emoji/language can not be switched off. */
+    private val toolList: List<Tool>
+        get() = allTools.filter { it.id !in remoteCfg.disabled || it.id in alwaysOn }
+
+    private val alwaysOn = setOf("settings", "emoji", "lang", "singlish", "news")
 
     private fun toolById(id: String): Tool? = toolList.firstOrNull { it.id == id }
 
@@ -1204,7 +1225,81 @@ class RioBoardService : InputMethodService() {
         gravity = Gravity.CENTER
     }
 
-    // ----- emoji panel -----
+    // ----- emoji panel (built-in tabs + emoji / sticker packs from the admin) -----
+    private class EmojiTab(val icon: String, val emojis: List<String>, val pack: RemoteConfig.Pack?)
+
+    private fun emojiTabs(): List<EmojiTab> =
+        emojiCats.map { EmojiTab(it.first, it.second, null) } +
+            remoteCfg.packs.take(4).map { EmojiTab(it.icon, if (it.type == "emoji") it.items else emptyList(), it) }
+
+    private val packBmps = HashMap<String, Bitmap>()
+    private var packLoading = false
+
+    private fun packFile(pack: RemoteConfig.Pack, path: String): File {
+        val ext = if (path.endsWith(".gif")) "gif" else "png"
+        // pk_ files are hidden from "my stickers" (StickerStore.list)
+        return File(StickerStore.dir(this), "pk_" + pack.id + "_" + Integer.toHexString(path.hashCode()) + "." + ext)
+    }
+
+    /** Grid of sticker pictures; missing ones are downloaded once (max 600 KB each) and the panel redraws. */
+    private fun stickerPackGrid(pack: RemoteConfig.Pack): View {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val missing = pack.items.filter { !packFile(pack, it).exists() }
+        if (missing.isNotEmpty() && !packLoading) {
+            packLoading = true
+            Thread {
+                missing.forEach { RemoteConfig.fetch(it, packFile(pack, it), 600 * 1024) }
+                handler.post {
+                    packLoading = false
+                    if (::root.isInitialized && panel == Panel.EMOJI) render()
+                }
+            }.start()
+        }
+        pack.items.chunked(4).forEach { rowItems ->
+            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            rowItems.forEach { path ->
+                val f = packFile(pack, path)
+                val key = f.name
+                var bmp = packBmps[key]
+                if (bmp == null && f.exists()) {
+                    try {
+                        bmp = BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = 2 })
+                        if (bmp != null) packBmps[key] = bmp
+                    } catch (e: Exception) {
+                    } catch (e: OutOfMemoryError) {
+                    }
+                }
+                r.addView(FrameLayout(this).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, dp(78), 1f).apply { setMargins(dp(3), dp(3), dp(3), dp(3)) }
+                    background = roundBg(th.key, 10)
+                    isClickable = true
+                    setPadding(dp(4), dp(4), dp(4), dp(4))
+                    if (bmp != null) {
+                        addView(android.widget.ImageView(this@RioBoardService).apply {
+                            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                            setImageBitmap(bmp)
+                        }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                    } else {
+                        addView(TextView(this@RioBoardService).apply {
+                            text = "\u2026"
+                            gravity = Gravity.CENTER
+                            setTextColor(th.hint)
+                        }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                    }
+                    setOnClickListener {
+                        feedback(it)
+                        if (f.exists()) sendSticker(f) else toast("Loading...")
+                    }
+                })
+            }
+            repeat(4 - rowItems.size) {
+                r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+            }
+            col.addView(r)
+        }
+        return col
+    }
+
     private fun renderEmoji() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1212,9 +1307,11 @@ class RioBoardService : InputMethodService() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH))
         }
         header.addView(backButton())
-        emojiCats.forEachIndexed { i, cat ->
+        val tabs = emojiTabs()
+        if (emojiCat >= tabs.size) emojiCat = 0
+        tabs.forEachIndexed { i, cat ->
             header.addView(TextView(this).apply {
-                text = cat.first
+                text = cat.icon
                 gravity = Gravity.CENTER
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
                 background = roundBg(if (i == emojiCat) th.accent else Color.TRANSPARENT, 12)
@@ -1234,7 +1331,9 @@ class RioBoardService : InputMethodService() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(2), dp(2), dp(2), dp(8))
         }
-        emojiCats[emojiCat].second.chunked(8).forEach { items ->
+        val curTab = tabs[emojiCat]
+        curTab.pack?.let { p -> if (p.type == "sticker") grid.addView(stickerPackGrid(p)) }
+        curTab.emojis.chunked(8).forEach { items ->
             val r = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46))
@@ -1355,7 +1454,7 @@ class RioBoardService : InputMethodService() {
                     setPadding(dp(6), dp(2), dp(6), dp(2))
                 }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
             }
-            tile(id == videoName, cell) { setVideoBackground(id) }
+            tile(id == videoName, cell) { AnimatedBackgrounds.use(this, id) }
         }
         addTiles(vtiles)
         root.addView(panelBody(grid))
@@ -3859,6 +3958,18 @@ class RioBoardService : InputMethodService() {
 
     private fun announceNews() {
         RemoteConfig.toastWorthy(prefs, remoteCfg)?.let { toast("\uD83D\uDCF0 " + it.title) }
+        remoteCfg.notice?.let { n ->
+            if (prefs.getString("notice_seen", "") != n.id) {
+                prefs.edit().putString("notice_seen", n.id).apply()
+                toast("\u26A0\uFE0F " + n.message)
+            }
+        }
+        if (remoteCfg.minVersion > installedVersionCode() &&
+            prefs.getInt("minver_seen", 0) != remoteCfg.minVersion
+        ) {
+            prefs.edit().putInt("minver_seen", remoteCfg.minVersion).apply()
+            toast("\u26A0\uFE0F Update required - see the News panel")
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -3937,6 +4048,7 @@ class RioBoardService : InputMethodService() {
             setPadding(dp(4), dp(2), dp(4), dp(8))
         }
         val up = remoteCfg.update
+        remoteCfg.notice?.let { n -> list.addView(newsCard("\u26A0\uFE0F Notice", n.message, "", "", true)) }
         if (up != null && up.code > installedVersionCode()) {
             val head = if (up.name.isNotEmpty()) "Update " + up.name + " is ready" else "Update is ready"
             if (up.url.endsWith(".apk", ignoreCase = true)) {
