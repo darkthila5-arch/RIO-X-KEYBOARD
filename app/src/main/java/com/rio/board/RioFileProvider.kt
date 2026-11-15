@@ -29,6 +29,15 @@ class RioFileProvider : ContentProvider() {
     private fun fileFor(uri: Uri): File? {
         val ctx = context ?: return null
         val name = uri.lastPathSegment ?: return null
+        if (name.endsWith(".apk")) {          // the downloaded app update (UpdateActivity)
+            val ud = File(ctx.cacheDir, "update")
+            val uf = File(ud, name)
+            return try {
+                if (uf.isFile && uf.canonicalFile.parentFile == ud.canonicalFile) uf else null
+            } catch (e: Exception) {
+                null
+            }
+        }
         val dir = StickerStore.dir(ctx)
         val f = File(dir, name)
         return try {
@@ -38,7 +47,9 @@ class RioFileProvider : ContentProvider() {
         }
     }
 
-    override fun getType(uri: Uri): String? = fileFor(uri)?.let { StickerStore.mimeOf(it) }
+    override fun getType(uri: Uri): String? = fileFor(uri)?.let {
+        if (it.name.endsWith(".apk")) "application/vnd.android.package-archive" else StickerStore.mimeOf(it)
+    }
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         val f = fileFor(uri) ?: throw FileNotFoundException(uri.toString())

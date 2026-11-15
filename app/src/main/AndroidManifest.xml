@@ -4,6 +4,8 @@
     <!-- only used to read the config.json link in RemoteConfig.kt (themes, news). Nothing typed is ever sent. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- lets the app open Android's installer for its own updates (UpdateActivity) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -46,6 +48,14 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- downloads and installs a new version of the app -->
+        <activity
+            android:name=".UpdateActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault.Dialog" />
 
         <!-- lock / unlock secret messages, opened from the keyboard -->
         <activity

@@ -63,7 +63,7 @@ object DefaultBackgrounds {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(2), dp(4), dp(2), dp(4))
         }
-        items.forEach { (name, file) ->
+        items.filter { it.second !in RemoteConfig.current.hiddenBg }.forEach { (name, file) ->
             val iv = ImageView(ctx).apply {
                 scaleType = ImageView.ScaleType.CENTER_CROP
                 setBackgroundColor(Color.parseColor("#2B2D35"))

@@ -48,6 +48,16 @@ input[type=color]{width:44px;height:36px;padding:0;border:1px solid var(--line);
 .news b{display:block}.news small{color:var(--mut)}
 dialog{border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink);max-width:520px;width:calc(100% - 24px);padding:16px}
 dialog::backdrop{background:rgba(0,0,0,.5)}
+.sec{font-weight:600;margin:14px 0 6px;font-size:14px}
+.tag{font-size:11px;color:var(--mut)}
+.bgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.bcard{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--card)}
+.bcard img{width:100%;aspect-ratio:16/10;object-fit:cover;display:block;background:var(--field)}
+.bcard .bi{padding:6px 8px;font-size:13px}
+.bcard.off img{opacity:.3}
+.bcard input[type=text]{padding:5px 7px;font-size:13px}
+.bcard .chk{margin:4px 0 0;font-size:12px}
+.bcard button{padding:4px 8px;font-size:12px;margin-top:4px}
 code{background:var(--field);border:1px solid var(--line);border-radius:6px;padding:1px 5px;word-break:break-all}
 </style>
 </head>
@@ -88,6 +98,23 @@ const PRESETS={
  Purple:['#1B1030','#2F1D54','#432A78','#A855F7','#EC4899','#6A4DA8','#FFFFFF','#C4A8F0','#F3E8FF'],
  Light:['#E8EAF0','#FFFFFF','#C9CEDB','#3B82F6','#7C6CE0','#B8BFD3','#111111','#5B6382','#8FB8FF']
 };
+const LIVE={
+ Aurora:['#07111F','#99101C33','#B01A2A48','#4DFFB5','#8E6BFF','#CC2E4A78','#FFFFFF','#A8C7E8','#CFFFEF'],
+ Galaxy:['#0B0720','#99181033','#B0261A4D','#B388FF','#FF6EC7','#CC4A3A8F','#FFFFFF','#C3B5F0','#FFFFFF'],
+ Lava:['#1A0606','#99360E0A','#B0501810','#FF7A18','#FF3D71','#CC8A3A20','#FFFFFF','#FFC9A8','#FFE0C0'],
+ Neon:['#070617','#990B0A2A','#B0161448','#00E5FF','#FF2EE6','#CC3A38A8','#FFFFFF','#A8B8FF','#CFF8FF'],
+ Waves:['#04202E','#990A3446','#B0104A63','#26E0D0','#4DA3FF','#CC2A7A99','#FFFFFF','#9AD7EA','#E6FBFF'],
+ Matrix:['#020A04','#99061A0C','#B0092A12','#00FF66','#B6FF3B','#CC127A33','#D6FFE0','#6BE08A','#7CFFB2'],
+ RGB:['#101018','#99181822','#B0242434','#FF4D8D','#4DA3FF','#CC4A4A66','#FFFFFF','#C8C8E0','#FFFFFF']
+};
+// what the app ships with today (names must match the app)
+const BUILTIN_THEMES=[].concat(
+ Object.keys(PRESETS).map(n=>({name:n,kind:'Classic',c:PRESETS[n]})),
+ [{name:'Auto',kind:'Follows the phone (dark / light)',c:PRESETS.Dark},{name:'Material You',kind:'Wallpaper colours (Android 12+)',c:PRESETS.Purple}],
+ Object.keys(LIVE).map(n=>({name:n,kind:'Animated',c:LIVE[n]}))
+);
+const BUILTIN_BG=[['Panda glow','panda_glow.jpg'],['Bamboo panda','panda_bamboo.jpg'],['Bears','bears.jpg'],['Cats','cats.jpg'],['Miku','miku.jpg'],['Zero Two','zero_two.jpg'],['Psycho','psycho.jpg'],['Butterfly','butterfly.jpg']];
+const BUILTIN_VID=[['Aurora','aurora'],['Neon waves','neon_waves'],['Starfield','starfield'],['Lava','lava'],['Synthwave','synthwave'],['Bokeh','bokeh'],['Galaxy','galaxy'],['Plasma','plasma']];
 const HEX=/^#([0-9a-f]{6}|[0-9a-f]{8})$/i;
 function cssColor(hex){
   if(!HEX.test(hex))return 'transparent';
@@ -103,8 +130,14 @@ function b64dec(t){const bin=atob(t.replace(/\s/g,''));return new TextDecoder().
 function newTheme(name,preset){const t={id:'',name:name,enabled:true};KEYS.forEach((k,i)=>{t[k]=PRESETS[preset||'Dark'][i]});return t}
 function today(){return new Date().toISOString().slice(0,10)}
 function normalize(o){
-  const c={version:1,updated:'',themes:[],news:[],update:null};
+  const c={version:1,updated:'',themes:[],news:[],update:null,hidden:{themes:[],backgrounds:[],videos:[]},backgrounds:[]};
   if(!o||typeof o!=='object')return c;
+  const hs=(o.hidden&&typeof o.hidden==='object')?o.hidden:{};
+  ['themes','backgrounds','videos'].forEach(k=>{c.hidden[k]=Array.isArray(hs[k])?hs[k].map(String):[]});
+  (Array.isArray(o.backgrounds)?o.backgrounds:[]).forEach(b=>{
+    if(!b||typeof b!=='object')return;
+    c.backgrounds.push({id:String(b.id||''),name:String(b.name||'Background'),file:String(b.file||''),thumb:String(b.thumb||''),enabled:b.enabled!==false});
+  });
   (Array.isArray(o.themes)?o.themes:[]).forEach(t=>{
     if(!t||typeof t!=='object')return;
     const n=newTheme(String(t.name||'Theme'));
@@ -136,6 +169,10 @@ function validate(c){
     if(!n.title.trim())errs.push('News '+(i+1)+': title is empty');
     if(n.link&&!/^https:\/\//i.test(n.link))errs.push('News "'+n.title+'": link must start with https://');
   });
+  c.backgrounds.forEach((b,i)=>{
+    if(!b.name.trim())errs.push('Background '+(i+1)+': name is empty');
+    if(!/^bg\/[A-Za-z0-9._-]{1,80}$/.test(b.file)||b.file.includes('..'))errs.push('Background "'+b.name+'": file path is not valid');
+  });
   if(c.update){
     if(!(c.update.versionCode>0))errs.push('Update: version code must be a number above 0');
     if(c.update.url&&!/^https:\/\//i.test(c.update.url))errs.push('Update: link must start with https://');
@@ -143,7 +180,9 @@ function validate(c){
   return errs;
 }
 function buildJson(c){
-  const out={version:1,updated:new Date().toISOString(),themes:[],news:[],update:c.update};
+  const out={version:1,updated:new Date().toISOString(),themes:[],news:[],update:c.update,
+    hidden:{themes:c.hidden.themes.slice(),backgrounds:c.hidden.backgrounds.slice(),videos:c.hidden.videos.slice()},
+    backgrounds:c.backgrounds.map(b=>({id:b.id,name:b.name.trim(),file:b.file,thumb:b.thumb,enabled:!!b.enabled}))};
   const ids=new Set();
   c.themes.forEach(t=>{
     let id=slug(t.name),n=2;while(ids.has(id)){id=slug(t.name)+'-'+(n++)}ids.add(id);
@@ -153,10 +192,20 @@ function buildJson(c){
   if(!out.update)delete out.update;
   return JSON.stringify(out,null,2)+'\n';
 }
+function releaseInfo(rel){
+  const tag=String(rel.tag_name||'');
+  const code=parseInt((tag.match(/(\d+)\s*$/)||[])[1]||'0',10);
+  const apk=(rel.assets||[]).find(a=>/\.apk$/i.test(a.name));
+  return{versionCode:code,versionName:code?('1.0.'+code):tag.replace(/^v/i,''),url:apk?apk.browser_download_url:''};
+}
+function uniqueId(base,taken){let id=slug(base),n=2;while(taken.has(id)){id=slug(base)+'-'+(n++)}return id}
 //#pure-end
 
 const S={owner:'',repo:'',branch:'main',path:'docs/config.json',token:''};
-let cfg=normalize(null),sha=null,dirty=false,tab='themes',selT=0,selN=0;
+let cfg=normalize(null),sha=null,dirty=false,tab='themes',selT=0,selN=0,selB=null;
+const PREVIEWS=new Map();  // id -> local preview so a new image shows at once
+const PENDING=new Map();   // new background images waiting for Publish: id -> {full,thumb,url}
+let DELETE_FILES=[];        // image files in the repo to remove on Publish
 const $=s=>document.querySelector(s);
 
 function h(tag,attrs,...kids){
@@ -178,20 +227,32 @@ function loadSettings(){try{Object.assign(S,JSON.parse(localStorage.getItem('rio
 function saveSettings(){try{localStorage.setItem('rio_admin',JSON.stringify(S))}catch(e){}}
 
 /* ---------- GitHub ---------- */
-function apiUrl(){return 'https://api.github.com/repos/'+encodeURIComponent(S.owner)+'/'+encodeURIComponent(S.repo)+'/contents/'+S.path.split('/').map(encodeURIComponent).join('/')}
+function apiUrl(p){p=p||S.path;return 'https://api.github.com/repos/'+encodeURIComponent(S.owner)+'/'+encodeURIComponent(S.repo)+'/contents/'+p.split('/').map(encodeURIComponent).join('/')}
+function dirOf(p){const i=p.lastIndexOf('/');return i<0?'':p.slice(0,i+1)}
 function hdr(){const x={'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'};if(S.token)x.Authorization='Bearer '+S.token;return x}
 async function errText(r){let m='';try{m=(await r.json()).message||''}catch(e){}
   if(r.status===401)return 'Token not accepted (401). Make a new token.';
   if(r.status===403)return 'GitHub says no (403): '+m;
   if(r.status===404)return 'Not found (404). Check owner, repository and that the token can see this repo.';
   return 'GitHub error '+r.status+(m?': '+m:'')}
-async function ghGet(){
-  const r=await fetch(apiUrl()+'?ref='+encodeURIComponent(S.branch),{headers:hdr(),cache:'no-store'});
+async function ghGet(path){
+  const r=await fetch(apiUrl(path)+'?ref='+encodeURIComponent(S.branch),{headers:hdr(),cache:'no-store'});
   if(r.status===404)return{sha:null,text:null};
   if(!r.ok)throw new Error(await errText(r));
   const j=await r.json();
   if(typeof j.content!=='string')throw new Error('File is too big or is a folder.');
   return{sha:j.sha,text:b64dec(j.content)};
+}
+async function ghPutFile(path,b64,msg){
+  const cur=await ghGet(path);
+  const r=await fetch(apiUrl(path),{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},hdr()),
+    body:JSON.stringify({message:msg,content:b64,sha:cur.sha||undefined,branch:S.branch})});
+  if(!r.ok)throw new Error(await errText(r));
+}
+async function ghDeleteFile(path){
+  const cur=await ghGet(path);if(!cur.sha)return;
+  await fetch(apiUrl(path),{method:'DELETE',headers:Object.assign({'Content-Type':'application/json'},hdr()),
+    body:JSON.stringify({message:'Admin: remove background',sha:cur.sha,branch:S.branch})});
 }
 async function load(){
   if(!S.owner||!S.repo){setStatus('set GitHub first','bad');return}
@@ -200,7 +261,8 @@ async function load(){
   try{
     const g=await ghGet();sha=g.sha;
     cfg=normalize(g.text?JSON.parse(g.text):null);
-    selT=0;selN=0;dirty=false;
+    PENDING.clear();DELETE_FILES=[];
+    selT=0;selN=0;selB=null;dirty=false;
     setStatus(g.text?'loaded':'new file (not on GitHub yet)','ok');draw();
   }catch(e){setStatus(e.message,'bad')}
 }
@@ -211,6 +273,19 @@ async function publish(){
   const body=buildJson(cfg);
   setStatus('publishing…');$('#bPub').disabled=true;
   try{
+    const base=dirOf(S.path);
+    const todo=cfg.backgrounds.filter(b=>PENDING.has(b.id));
+    let k=0;
+    for(const b of todo){
+      k++;setStatus('uploading images ('+k+'/'+todo.length+')…');
+      const p=PENDING.get(b.id);
+      await ghPutFile(base+b.file,p.full,'Admin: add background '+b.name);
+      await ghPutFile(base+b.thumb,p.thumb,'Admin: add background thumbnail');
+      PENDING.delete(b.id);
+    }
+    for(const f of DELETE_FILES){try{await ghDeleteFile(f)}catch(e){}}
+    DELETE_FILES=[];
+    setStatus('saving config…');
     let done=false;
     for(let i=0;i<2&&!done;i++){
       const cur=await ghGet();
@@ -228,9 +303,9 @@ async function publish(){
 }
 
 /* ---------- tabs ---------- */
-const TABS=[['themes','Themes'],['news','News'],['update','App update'],['raw','JSON']];
+const TABS=[['themes','Themes'],['bg','Backgrounds'],['news','News'],['update','App update'],['raw','JSON']];
 function drawTabs(){const n=$('#tabs');n.replaceChildren(...TABS.map(([k,l])=>h('button',{class:tab===k?'on':'',onclick:()=>{tab=k;draw()}},l)))}
-function draw(){drawTabs();const v=$('#view');v.replaceChildren();({themes:renderThemes,news:renderNews,update:renderUpdate,raw:renderRaw})[tab](v)}
+function draw(){drawTabs();const v=$('#view');v.replaceChildren();({themes:renderThemes,bg:renderBg,news:renderNews,update:renderUpdate,raw:renderRaw})[tab](v)}
 
 /* ---------- themes ---------- */
 function dots(t){return h('span',{class:'dots'},['bg','key','accent','active'].map(k=>h('i',{style:'background:'+cssColor(t[k])})))}
@@ -245,32 +320,102 @@ function preview(t){
     h('div',{class:'pr'},key('⇧',c('special'),c('text'),'w'),letters('zxcvbn'),key('⌫',c('special'),c('text'),'w')),
     h('div',{class:'pr'},key('?123',c('special'),c('text'),'w'),key('සිං',c('active'),c('text'),'w'),key('space',c('key'),c('hint'),'sp'),key('⏎',c('accent'),c('text'),'w')));
 }
+function colorsOf(arr){const o={};KEYS.forEach((k,i)=>{o[k]=arr[i]});return o}
+function isHidden(kind,key){return cfg.hidden[kind].includes(key)}
+function setHidden(kind,key,hide){
+  const a=cfg.hidden[kind].filter(x=>x!==key);if(hide)a.push(key);cfg.hidden[kind]=a;touch();
+}
 function renderThemes(v){
-  const list=h('div',{class:'card'},h('div',{class:'btns',style:'margin:0 0 10px'},h('button',{class:'pri',onclick:()=>{cfg.themes.push(newTheme('New theme '+(cfg.themes.length+1)));selT=cfg.themes.length-1;touch();draw()}},'+ New theme')));
-  cfg.themes.forEach((t,i)=>list.append(h('div',{class:'item'+(i===selT?' on':'')+(t.enabled?'':' off'),onclick:()=>{selT=i;draw()}},dots(t),h('div',{},t.name||'(no name)',h('small',{},t.enabled?'shown in the app':'hidden')))));
-  if(!cfg.themes.length)list.append(h('p',{class:'hint'},'No themes yet. Press “New theme”.'));
-  const t=cfg.themes[selT];const ed=h('div',{class:'card'});
-  if(!t){ed.append(h('p',{class:'hint'},'Pick or create a theme. Themes you publish show up in the app under “New from RIO” in the Theme panel.'))}
-  else{
-    const pv=h('div',{});const upd=()=>{pv.replaceChildren(preview(t));list.querySelectorAll('.item')[selT]?.querySelector('.dots')?.replaceWith(dots(t))};upd();
-    ed.append(pv,
-      h('label',{},'Theme name (max 18 letters)'),h('input',{type:'text',value:t.name,maxlength:18,oninput:e=>{t.name=e.target.value;touch();const it=list.querySelectorAll('.item')[selT];if(it)it.children[1].firstChild.textContent=t.name||'(no name)'}}),
-      h('label',{},'Start from a built-in theme'),
-      h('select',{onchange:e=>{if(!e.target.value)return;KEYS.forEach((k,i)=>{t[k]=PRESETS[e.target.value][i]});touch();draw()}},h('option',{value:''},'— choose —'),Object.keys(PRESETS).map(n=>h('option',{value:n},n))));
-    KEYS.forEach(k=>{
-      const txt=h('input',{type:'text',value:t[k],maxlength:9,spellcheck:'false'});
-      const pick=h('input',{type:'color',value:pickerValue(t[k])});
-      pick.addEventListener('input',()=>{t[k]=withPicker(t[k],pick.value);txt.value=t[k];touch();upd()});
-      txt.addEventListener('input',()=>{t[k]=txt.value.trim();if(HEX.test(t[k]))pick.value=pickerValue(t[k]);txt.style.borderColor=HEX.test(t[k])?'':'var(--bad)';touch();upd()});
-      ed.append(h('div',{class:'crow'},h('span',{},LABELS[k]),pick,txt));
-    });
-    ed.append(h('p',{class:'hint'},'Colours are #RRGGBB. For see-through keys use #AARRGGBB (first two letters = transparency, 99 is about 60%).'),
-      h('label',{class:'chk'},h('input',{type:'checkbox',checked:t.enabled,onchange:e=>{t.enabled=e.target.checked;touch();draw()}}),'Show this theme in the app'),
-      h('div',{class:'btns'},
-        h('button',{onclick:()=>{const c=Object.assign({},t,{name:(t.name+' copy').slice(0,18)});cfg.themes.splice(selT+1,0,c);selT++;touch();draw()}},'Duplicate'),
-        h('button',{class:'del',onclick:()=>{if(confirm('Delete “'+t.name+'”?')){cfg.themes.splice(selT,1);selT=Math.max(0,selT-1);touch();draw()}}},'Delete')));
+  const list=h('div',{class:'card'},h('div',{class:'btns',style:'margin:0 0 6px'},h('button',{class:'pri',onclick:()=>{cfg.themes.push(newTheme('New theme '+(cfg.themes.length+1)));selT=cfg.themes.length-1;selB=null;touch();draw()}},'+ New theme')));
+  list.append(h('div',{class:'sec'},'Added by you'));
+  cfg.themes.forEach((t,i)=>list.append(h('div',{class:'item'+(selB===null&&i===selT?' on':'')+(t.enabled?'':' off'),onclick:()=>{selT=i;selB=null;draw()}},dots(t),h('div',{},t.name||'(no name)',h('small',{},t.enabled?'shown in the app':'hidden')))));
+  if(!cfg.themes.length)list.append(h('p',{class:'hint'},'Nothing yet. Press “New theme”.'));
+  list.append(h('div',{class:'sec'},'Built-in (already in the app)'));
+  BUILTIN_THEMES.forEach(b=>{
+    const hid=isHidden('themes',b.name);
+    list.append(h('div',{class:'item'+(selB===b.name?' on':'')+(hid?' off':''),onclick:()=>{selB=b.name;draw()}},dots(colorsOf(b.c)),h('div',{},b.name,h('small',{},b.kind+(hid?' · removed':'')))));
+  });
+  const ed=h('div',{class:'card'});
+  if(selB!==null){
+    const b=BUILTIN_THEMES.find(x=>x.name===selB)||BUILTIN_THEMES[0];
+    const hid=isHidden('themes',b.name);
+    ed.append(preview(colorsOf(b.c)),
+      h('b',{},b.name),h('p',{class:'hint'},'Built-in · '+b.kind+'. Built-in themes can not be edited, but you can remove them from the app or copy the colours into your own theme.'),
+      h('label',{class:'chk'},h('input',{type:'checkbox',checked:!hid,onchange:e=>{setHidden('themes',b.name,!e.target.checked);draw()}}),'Show in the app'),
+      h('div',{class:'btns'},h('button',{onclick:()=>{const t=newTheme((b.name+' copy').slice(0,18));KEYS.forEach((k,i)=>{t[k]=b.c[i]});cfg.themes.push(t);selT=cfg.themes.length-1;selB=null;touch();draw()}},'Copy colours into a new theme')));
+  }else{
+    const t=cfg.themes[selT];
+    if(!t){ed.append(h('p',{class:'hint'},'Pick a theme on the left, or press “New theme”. Themes you add show up in the app under “New from RIO” in the Theme panel.'))}
+    else{
+      const pv=h('div',{});const upd=()=>{pv.replaceChildren(preview(t));list.querySelectorAll('.item')[selT]?.querySelector('.dots')?.replaceWith(dots(t))};upd();
+      ed.append(pv,
+        h('label',{},'Theme name (max 18 letters)'),h('input',{type:'text',value:t.name,maxlength:18,oninput:e=>{t.name=e.target.value;touch();const it=list.querySelectorAll('.item')[selT];if(it)it.children[1].firstChild.textContent=t.name||'(no name)'}}),
+        h('label',{},'Start from a built-in theme'),
+        h('select',{onchange:e=>{if(!e.target.value)return;KEYS.forEach((k,i)=>{t[k]=PRESETS[e.target.value][i]});touch();draw()}},h('option',{value:''},'— choose —'),Object.keys(PRESETS).map(n=>h('option',{value:n},n))));
+      KEYS.forEach(k=>{
+        const txt=h('input',{type:'text',value:t[k],maxlength:9,spellcheck:'false'});
+        const pick=h('input',{type:'color',value:pickerValue(t[k])});
+        pick.addEventListener('input',()=>{t[k]=withPicker(t[k],pick.value);txt.value=t[k];touch();upd()});
+        txt.addEventListener('input',()=>{t[k]=txt.value.trim();if(HEX.test(t[k]))pick.value=pickerValue(t[k]);txt.style.borderColor=HEX.test(t[k])?'':'var(--bad)';touch();upd()});
+        ed.append(h('div',{class:'crow'},h('span',{},LABELS[k]),pick,txt));
+      });
+      ed.append(h('p',{class:'hint'},'Colours are #RRGGBB. For see-through keys use #AARRGGBB (first two letters = transparency, 99 is about 60%).'),
+        h('label',{class:'chk'},h('input',{type:'checkbox',checked:t.enabled,onchange:e=>{t.enabled=e.target.checked;touch();draw()}}),'Show this theme in the app'),
+        h('div',{class:'btns'},
+          h('button',{onclick:()=>{const c=Object.assign({},t,{name:(t.name+' copy').slice(0,18)});cfg.themes.splice(selT+1,0,c);selT++;touch();draw()}},'Duplicate'),
+          h('button',{class:'del',onclick:()=>{if(confirm('Delete “'+t.name+'”?')){cfg.themes.splice(selT,1);selT=Math.max(0,selT-1);touch();draw()}}},'Delete')));
+    }
   }
   v.append(h('div',{class:'grid'},list,ed));
+}
+
+/* ---------- backgrounds ---------- */
+function blobB64(blob){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result).split(',')[1]);r.onerror=()=>rej(new Error('read failed'));r.readAsDataURL(blob)})}
+async function toJpeg(file,maxW,maxH,q){
+  const bmp=await createImageBitmap(file);
+  const sc=Math.min(1,maxW/bmp.width,maxH/bmp.height);
+  const c=document.createElement('canvas');c.width=Math.max(1,Math.round(bmp.width*sc));c.height=Math.max(1,Math.round(bmp.height*sc));
+  c.getContext('2d').drawImage(bmp,0,0,c.width,c.height);
+  return new Promise((res,rej)=>c.toBlob(b=>b?res(b):rej(new Error('could not convert image')),'image/jpeg',q));
+}
+async function addImages(files){
+  setStatus('preparing images…');
+  for(const f of files){
+    try{
+      const full=await toJpeg(f,1080,1600,.85),thumb=await toJpeg(f,360,360,.8);
+      const id=uniqueId((f.name||'bg').replace(/\.[^.]+$/,''),new Set(cfg.backgrounds.map(b=>b.id)))+'-'+Date.now().toString(36).slice(-4);
+      cfg.backgrounds.push({id:id,name:(f.name||'Background').replace(/\.[^.]+$/,'').slice(0,30),file:'bg/'+id+'.jpg',thumb:'bg/'+id+'_t.jpg',enabled:true});
+      const pu=URL.createObjectURL(thumb);PREVIEWS.set(id,pu);
+      PENDING.set(id,{full:await blobB64(full),thumb:await blobB64(thumb),url:pu});
+    }catch(e){alert('Could not use “'+f.name+'”: '+e.message)}
+  }
+  touch();draw();
+}
+function bgCard(src,name,on,onToggle,extra){
+  return h('div',{class:'bcard'+(on?'':' off')},h('img',{src:src,alt:name,loading:'lazy'}),
+    h('div',{class:'bi'},extra||name,h('label',{class:'chk'},h('input',{type:'checkbox',checked:on,onchange:e=>onToggle(e.target.checked)}),'Show in the app')));
+}
+function renderBg(v){
+  const own=h('div',{class:'bgrid'});
+  cfg.backgrounds.forEach((b,i)=>{
+    const src=PREVIEWS.get(b.id)||('../'+b.thumb);
+    const nm=h('input',{type:'text',value:b.name,maxlength:30,oninput:e=>{b.name=e.target.value;touch()}});
+    const card=bgCard(src,b.name,b.enabled,on=>{b.enabled=on;touch();draw()},h('div',{},nm,h('div',{class:'tag'},PENDING.has(b.id)?'new, uploads when you press Publish':'published')));
+    card.querySelector('.bi').append(h('button',{class:'del',onclick:()=>{
+      if(!confirm('Delete “'+b.name+'”?'))return;
+      if(PENDING.has(b.id))PENDING.delete(b.id);else DELETE_FILES.push(dirOf(S.path)+b.file,dirOf(S.path)+b.thumb);
+      cfg.backgrounds.splice(i,1);touch();draw()}},'Delete'));
+    own.append(card);
+  });
+  const pick=h('input',{type:'file',accept:'image/*',multiple:true,style:'display:none',onchange:e=>{addImages([...e.target.files]);e.target.value=''}});
+  const photos=h('div',{class:'bgrid'},BUILTIN_BG.map(([n,f])=>bgCard('../builtin/bg/'+f,n,!isHidden('backgrounds',f),on=>{setHidden('backgrounds',f,!on);draw()})));
+  const vids=h('div',{class:'bgrid'},BUILTIN_VID.map(([n,id])=>bgCard('../builtin/vid/'+id+'.jpg',n+' ▶',!isHidden('videos',id),on=>{setHidden('videos',id,!on);draw()})));
+  v.append(h('div',{class:'card'},
+    h('div',{class:'btns',style:'margin:0 0 6px'},h('button',{class:'pri',onclick:()=>pick.click()},'+ Add image'),pick),
+    h('p',{class:'hint'},'Images are shrunk automatically (about 1080 px wide) so the keyboard downloads them quickly. They are saved in your repo under docs/bg when you press Publish.'),
+    h('div',{class:'sec'},'Added by you'),cfg.backgrounds.length?own:h('p',{class:'hint'},'Nothing yet.'),
+    h('div',{class:'sec'},'Built-in photos (untick = remove from the app)'),photos,
+    h('div',{class:'sec'},'Built-in animated backgrounds'),vids));
 }
 
 /* ---------- news ---------- */
@@ -298,12 +443,27 @@ function renderNews(v){
 function renderUpdate(v){
   const u=cfg.update||{versionCode:0,versionName:'',message:'',url:''};
   const set=(k,val)=>{if(!cfg.update)cfg.update={versionCode:0,versionName:'',message:'',url:''};cfg.update[k]=val;touch()};
-  v.append(h('div',{class:'card',style:'max-width:620px'},
-    h('p',{class:'hint'},'Tell users a new APK is ready. The keyboard shows it at the top of the News panel when this number is higher than the installed app’s versionCode.'),
-    h('label',{},'Version code (number, same as versionCode in app/build.gradle.kts)'),h('input',{type:'number',min:0,value:u.versionCode||'',oninput:e=>set('versionCode',parseInt(e.target.value||'0',10)||0)}),
-    h('label',{},'Version name (for example 1.2)'),h('input',{type:'text',value:u.versionName,maxlength:20,oninput:e=>set('versionName',e.target.value)}),
+  const fields=h('div',{});
+  const fill=async()=>{
+    if(!S.owner||!S.repo){openSettings();return}
+    setStatus('checking latest release…');
+    try{
+      const r=await fetch('https://api.github.com/repos/'+encodeURIComponent(S.owner)+'/'+encodeURIComponent(S.repo)+'/releases/latest',{headers:hdr(),cache:'no-store'});
+      if(!r.ok)throw new Error(await errText(r));
+      const info=releaseInfo(await r.json());
+      if(!info.versionCode||!info.url)throw new Error('The latest release has no number or no .apk file yet.');
+      cfg.update=Object.assign({versionCode:0,versionName:'',message:'',url:''},cfg.update||{},info);
+      touch();draw();setStatus('filled from the latest release – add a message and Publish','ok');
+    }catch(e){setStatus(e.message,'bad')}
+  };
+  v.append(h('div',{class:'card',style:'max-width:640px'},
+    h('p',{class:'hint'},'When the number below is higher than the installed app’s version, the keyboard shows an update card at the top of the News panel. Tapping it downloads the APK and opens Android’s installer (the user still taps Install).'),
+    h('div',{class:'btns',style:'margin:0 0 6px'},h('button',{class:'pri',onclick:fill},'Fill from my latest release')),
+    h('p',{class:'hint'},'Every build on GitHub Actions makes a release automatically. This button reads its number and APK link for you.'),
+    h('label',{},'Version code (number)'),h('input',{type:'number',min:0,value:u.versionCode||'',oninput:e=>set('versionCode',parseInt(e.target.value||'0',10)||0)}),
+    h('label',{},'Version name (for example 1.0.12)'),h('input',{type:'text',value:u.versionName,maxlength:20,oninput:e=>set('versionName',e.target.value)}),
     h('label',{},'What is new (short)'),h('textarea',{value:u.message,maxlength:300,oninput:e=>set('message',e.target.value)}),
-    h('label',{},'Download link (https only, for example your GitHub Releases page)'),h('input',{type:'text',value:u.url,placeholder:'https://',oninput:e=>set('url',e.target.value)}),
+    h('label',{},'APK link (https). A link ending in .apk gives the download-and-install button'),h('input',{type:'text',value:u.url,placeholder:'https://github.com/…/RIO-BOARD.apk',oninput:e=>set('url',e.target.value)}),
     h('div',{class:'btns'},h('button',{class:'del',onclick:()=>{cfg.update=null;touch();draw()}},'Remove update notice'))));
 }
 

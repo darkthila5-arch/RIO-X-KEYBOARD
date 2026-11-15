@@ -27,5 +27,7 @@
       "pinned": false,
       "enabled": true
     }
-  ]
+  ],
+  "hidden": { "themes": [], "backgrounds": [], "videos": [] },
+  "backgrounds": []
 }

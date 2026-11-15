@@ -53,7 +53,7 @@ object AnimatedBackgrounds {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(2), dp(4), dp(2), dp(4))
         }
-        items.forEach { (name, id) ->
+        items.filter { it.second !in RemoteConfig.current.hiddenVideos }.forEach { (name, id) ->
             val cell = FrameLayout(ctx).apply {
                 setBackgroundColor(Color.parseColor("#2B2D35"))
                 clipToOutline = true

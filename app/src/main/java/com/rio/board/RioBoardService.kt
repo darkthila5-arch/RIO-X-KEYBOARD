@@ -154,6 +154,7 @@ class RioBoardService : InputMethodService() {
             val i = remoteCfg.themes.indexOfFirst { it.id == rid }
             if (i >= 0) baseThemes.size + i else 0
         } else prefs.getInt("theme", 0).coerceIn(0, baseThemes.size - 1)
+        RemoteConfig.current = remoteCfg
         themeCache = null
     }
 
@@ -1226,7 +1227,7 @@ class RioBoardService : InputMethodService() {
             } catch (e: Exception) {
             }
         })
-        DefaultBackgrounds.items.forEach { (_, file) ->
+        DefaultBackgrounds.items.filter { it.second !in remoteCfg.hiddenBg }.forEach { (_, file) ->
             val iv = android.widget.ImageView(this).apply {
                 scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
                 setBackgroundColor(th.key)
@@ -1240,6 +1241,20 @@ class RioBoardService : InputMethodService() {
             }
             tiles.add(tile(file == current, iv) { DefaultBackgrounds.setAsBackground(this, file) })
         }
+        remoteCfg.backgrounds.forEach { b ->
+            val iv = android.widget.ImageView(this).apply {
+                scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                setBackgroundColor(th.key)
+                clipToOutline = true
+                outlineProvider = object : android.view.ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: android.graphics.Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, dp(10).toFloat())
+                    }
+                }
+            }
+            loadRemoteThumb(b, iv)
+            tiles.add(tile(current == "remote:" + b.id, iv) { applyRemoteBg(b) })
+        }
         fun addTiles(list: List<View>) {
             list.chunked(3).forEach { rowTiles ->
                 val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -1252,7 +1267,7 @@ class RioBoardService : InputMethodService() {
         }
         addTiles(tiles)
         grid.addView(settingLabel("Animated ▶ (loops, mutes itself when the keyboard closes)"))
-        val vtiles = AnimatedBackgrounds.items.map { (_, id) ->
+        val vtiles = AnimatedBackgrounds.items.filter { it.second !in remoteCfg.hiddenVideos }.map { (_, id) ->
             val cell = FrameLayout(this).apply {
                 addView(android.widget.ImageView(this@RioBoardService).apply {
                     scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
@@ -1619,8 +1634,9 @@ class RioBoardService : InputMethodService() {
         }
         val all = themes.withIndex().toList()
         val nb = baseThemes.size
-        section("Classic", all.filter { it.index < nb && it.value.live == null })
-        section("Live themes (animated)", all.filter { it.index < nb && it.value.live != null })
+        val hid = remoteCfg.hiddenThemes
+        section("Classic", all.filter { it.index < nb && it.value.live == null && it.value.name !in hid })
+        section("Live themes (animated)", all.filter { it.index < nb && it.value.live != null && it.value.name !in hid })
         if (themes.size > nb) section("New from RIO", all.filter { it.index >= nb })
         root.addView(panelBody(grid))
     }
@@ -3627,6 +3643,47 @@ class RioBoardService : InputMethodService() {
     }
 
     // ---------- news + update notice from the admin web (RemoteConfig.kt) ----------
+    private fun launchUpdate(url: String) {
+        try {
+            startActivity(Intent(this, UpdateActivity::class.java).putExtra("url", url).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun loadRemoteThumb(b: RemoteConfig.RBg, iv: android.widget.ImageView) {
+        Thread {
+            val f = RemoteConfig.thumbFile(this, b)
+            if (!f.exists()) RemoteConfig.download(RemoteConfig.baseUrl() + b.thumb, f, 400_000)
+            val bmp = try {
+                if (f.exists()) BitmapFactory.decodeFile(f.path) else null
+            } catch (e: Exception) {
+                null
+            }
+            if (bmp != null) iv.post { iv.setImageBitmap(bmp) }
+        }.start()
+    }
+
+    private fun applyRemoteBg(b: RemoteConfig.RBg) {
+        toast("Downloading\u2026")
+        Thread {
+            val tmp = File(cacheDir, "rbg_full.jpg")
+            val ok = RemoteConfig.download(RemoteConfig.baseUrl() + b.file, tmp, 6_000_000)
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                if (ok) {
+                    try {
+                        tmp.copyTo(File(filesDir, "kb_bg.jpg"), overwrite = true)
+                        prefs.edit().putBoolean("bgon", true).putString("bgname", "remote:" + b.id).apply()
+                        reloadBackground()
+                    } catch (e: Exception) {
+                        toast("Could not use this image")
+                    }
+                } else {
+                    toast("Could not download (no internet?)")
+                }
+            }
+        }.start()
+    }
+
     private fun announceNews() {
         RemoteConfig.toastWorthy(prefs, remoteCfg)?.let { toast("\uD83D\uDCF0 " + it.title) }
     }
@@ -3638,7 +3695,10 @@ class RioBoardService : InputMethodService() {
         Int.MAX_VALUE
     }
 
-    private fun newsCard(title: String, body: String, date: String, link: String, highlight: Boolean): View {
+    private fun newsCard(
+        title: String, body: String, date: String, link: String, highlight: Boolean,
+        action: (() -> Unit)? = null, actionLabel: String = ""
+    ): View {
         val fg = if (highlight) Color.WHITE else th.text
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -3665,7 +3725,19 @@ class RioBoardService : InputMethodService() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setPadding(0, dp(4), 0, 0)
         })
-        if (link.isNotEmpty()) {
+        if (action != null) {
+            card.addView(TextView(this).apply {
+                text = actionLabel
+                setTextColor(Color.WHITE)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(8), 0, 0)
+            })
+            card.setOnClickListener {
+                feedback(it)
+                action()
+            }
+        } else if (link.isNotEmpty()) {
             card.addView(TextView(this).apply {
                 text = "Tap to open"
                 setTextColor(if (highlight) Color.WHITE else th.accent)
@@ -3694,7 +3766,11 @@ class RioBoardService : InputMethodService() {
         val up = remoteCfg.update
         if (up != null && up.code > installedVersionCode()) {
             val head = if (up.name.isNotEmpty()) "Update " + up.name + " is ready" else "Update is ready"
-            list.addView(newsCard(head, up.message, "", up.url, true))
+            if (up.url.endsWith(".apk", ignoreCase = true)) {
+                list.addView(newsCard(head, up.message, "", "", true, { launchUpdate(up.url) }, "Tap to download and install"))
+            } else {
+                list.addView(newsCard(head, up.message, "", up.url, true))
+            }
         }
         remoteCfg.news.forEach { list.addView(newsCard((if (it.pinned) "\uD83D\uDCCC " else "") + it.title, it.body, it.date, it.link, false)) }
         if (remoteCfg.news.isEmpty() && (up == null || up.code <= installedVersionCode())) {

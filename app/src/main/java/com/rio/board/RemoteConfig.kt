@@ -1,11 +1,13 @@
 package com.rio.board
 
+import android.content.Context
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -17,15 +19,31 @@ import java.net.URL
 object RemoteConfig {
 
     /** Put YOUR link here. GitHub Pages: https://USER.github.io/REPO/config.json  (docs/config.json in the repo). */
-    const val CONFIG_URL = "https://darkthila5-arch.github.io/RIO-X-KEYBOARD/config.json"
+    const val CONFIG_URL = "https://YOUR_USER.github.io/YOUR_REPO/config.json"
 
     /** c = bg, key, special, accent, active, pressed, text, hint, snow */
     class RTheme(val id: String, val name: String, val c: List<String>)
     class News(val id: String, val title: String, val body: String, val date: String, val link: String, val pinned: Boolean)
     class Update(val code: Int, val name: String, val message: String, val url: String)
-    class Data(val themes: List<RTheme>, val news: List<News>, val update: Update?)
+    /** A wallpaper you added in the admin. file / thumb are paths below the config link, like bg/sunset.jpg */
+    class RBg(val id: String, val name: String, val file: String, val thumb: String)
+
+    class Data(
+        val themes: List<RTheme>,
+        val news: List<News>,
+        val update: Update?,
+        val hiddenThemes: Set<String> = emptySet(),      // built-in theme names the admin removed
+        val hiddenBg: Set<String> = emptySet(),          // built-in photo files the admin removed
+        val hiddenVideos: Set<String> = emptySet(),      // built-in animated ids the admin removed
+        val backgrounds: List<RBg> = emptyList()
+    )
 
     val empty = Data(emptyList(), emptyList(), null)
+
+    /** Latest config in use (also read by the background strips). */
+    @Volatile var current: Data = empty
+
+    private val FILE_OK = Regex("^bg/[A-Za-z0-9._-]{1,80}$")
 
     private val COLOR = Regex("^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
     private val KEYS = listOf("bg", "key", "special", "accent", "active", "pressed", "text", "hint", "snow")
@@ -71,7 +89,69 @@ object RemoteConfig {
             Update(u.optInt("versionCode"), u.optString("versionName", "").take(20), u.optString("message", "").take(300), httpsOnly(u.optString("url", "")))
         else null
 
-        return Data(themes, news, update)
+        fun strSet(a: JSONArray?): Set<String> {
+            val r = HashSet<String>()
+            if (a != null) for (i in 0 until minOf(a.length(), 100)) r.add(a.optString(i, ""))
+            return r
+        }
+        val h = o.optJSONObject("hidden")
+
+        val bgs = ArrayList<RBg>()
+        val ba = o.optJSONArray("backgrounds") ?: JSONArray()
+        for (i in 0 until minOf(ba.length(), 60)) {
+            val b = ba.optJSONObject(i) ?: continue
+            if (!b.optBoolean("enabled", true)) continue
+            val file = b.optString("file", "")
+            if (!FILE_OK.matches(file) || file.contains("..")) continue
+            val thumb = b.optString("thumb", "").let { if (FILE_OK.matches(it) && !it.contains("..")) it else file }
+            val id = b.optString("id", "").trim().take(40).ifEmpty { file }.replace("|", "_")
+            bgs.add(RBg(id, b.optString("name", id).take(30), file, thumb))
+        }
+
+        return Data(
+            themes, news, update,
+            strSet(h?.optJSONArray("themes")), strSet(h?.optJSONArray("backgrounds")), strSet(h?.optJSONArray("videos")),
+            bgs
+        )
+    }
+
+    /** Folder the config link lives in, with a closing slash. */
+    fun baseUrl(): String = CONFIG_URL.substringBeforeLast("/") + "/"
+
+    fun thumbFile(ctx: Context, b: RBg): File {
+        val dir = File(ctx.cacheDir, "rbg")
+        dir.mkdirs()
+        return File(dir, b.id.replace(Regex("[^A-Za-z0-9_-]"), "_") + "_" + b.thumb.hashCode() + ".jpg")
+    }
+
+    /** Blocking download (call from a background thread). Only https. */
+    fun download(url: String, dest: File, maxBytes: Int): Boolean {
+        if (!url.startsWith("https://")) return false
+        val tmp = File(dest.path + ".part")
+        return try {
+            val c = URL(url).openConnection() as HttpURLConnection
+            c.connectTimeout = 10000
+            c.readTimeout = 15000
+            if (c.responseCode != 200) throw IOException("http " + c.responseCode)
+            var total = 0
+            c.inputStream.use { ins ->
+                tmp.outputStream().use { out ->
+                    val buf = ByteArray(8192)
+                    while (true) {
+                        val n = ins.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > maxBytes) throw IOException("too big")
+                        out.write(buf, 0, n)
+                    }
+                }
+            }
+            if (dest.exists()) dest.delete()
+            tmp.renameTo(dest)
+        } catch (e: Exception) {
+            tmp.delete()
+            false
+        }
     }
 
     fun cached(prefs: SharedPreferences): Data = try {
