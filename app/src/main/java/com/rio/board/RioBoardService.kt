@@ -832,12 +832,11 @@ class RioBoardService : InputMethodService() {
 
     /** Round tool button (icon or text) like the Gboard top bar. */
     private fun toolCircle(t: Tool, sizeDp: Int, active: Boolean): View {
-        val fl = FrameLayout(this)
-        fl.background = ovalBg(th.key)
+        val fl = FrameLayout(this)      // no round background any more: only the icon is drawn
         if (t.kind != null) {
             val iv = IconView(this, t.kind)
             iv.tint = if (active) th.accent else th.text
-            val sz = dp((sizeDp * 0.56f).toInt())
+            val sz = dp((sizeDp * 0.66f).toInt())
             fl.addView(iv, FrameLayout.LayoutParams(sz, sz, Gravity.CENTER))
         } else {
             fl.addView(TextView(this).apply {
@@ -932,10 +931,9 @@ class RioBoardService : InputMethodService() {
             }
         }
         val tc = FrameLayout(this)
-        tc.background = ovalBg(th.key)
         val iv = IconView(this, if (editing) IconView.Kind.CLOSE else IconView.Kind.COLLAPSE)
         iv.tint = th.text
-        val sz = dp((circle * 0.56f).toInt())
+        val sz = dp((circle * 0.66f).toInt())
         tc.addView(iv, FrameLayout.LayoutParams(sz, sz, Gravity.CENTER))
         toggle.addView(tc, FrameLayout.LayoutParams(dp(circle), dp(circle), Gravity.CENTER))
         bar.addView(toggle)
