@@ -216,9 +216,10 @@ class RioBoardService : InputMethodService() {
     private var haptic = true
     private var hapticLevel = 2       // 0 off, 1 light, 2 medium, 3 strong
     private var pressLevel = 2        // key squeeze: 0 off, 1 soft, 2 normal, 3 strong
-    private val boomCounts = intArrayOf(5, 10, 20, 50)
-    private val boomDelays = longArrayOf(300L, 600L, 1000L)
-    private var boomCountIdx = 1
+    private val boomCounts = intArrayOf(5, 10, 20, 50, 100)
+    private val boomDelays = longArrayOf(500L, 1000L, 2000L)
+    private var boomCount = 10            // how many times to send (any number 1..500)
+    private var boomMethod = 0            // how "send" is pressed: 0 Enter/action, 1 Send action, 2 Ctrl+Enter
     private var boomDelayIdx = 1
     private var boomRunning = false
     private var statusItems: List<StatusSaver.Item>? = null
@@ -354,7 +355,7 @@ class RioBoardService : InputMethodService() {
         haptic = hapticLevel > 0
         pressLevel = prefs.getInt("pressanim", 2).coerceIn(0, 3)
         keyPreview = prefs.getBoolean("preview", true)
-        boomCountIdx = prefs.getInt("boom_count", 1).coerceIn(0, boomCounts.size - 1)
+        boomCount = prefs.getInt("boom_n", boomCounts[prefs.getInt("boom_count", 1).coerceIn(0, 3)]).coerceIn(1, 500)
         boomDelayIdx = prefs.getInt("boom_delay", 1).coerceIn(0, boomDelays.size - 1)
         keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
         singlishOn = prefs.getBoolean("singlish", false)
@@ -1798,6 +1799,18 @@ class RioBoardService : InputMethodService() {
         boomStatus?.text = t
     }
 
+    private fun boomSend(ic: android.view.inputmethod.InputConnection) {
+        when (boomMethod) {
+            1 -> ic.performEditorAction(EditorInfo.IME_ACTION_SEND)
+            2 -> {
+                val t = SystemClock.uptimeMillis()
+                ic.sendKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0, KeyEvent.META_CTRL_ON))
+                ic.sendKeyEvent(KeyEvent(t, t, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER, 0, KeyEvent.META_CTRL_ON))
+            }
+            else -> pressEnter()
+        }
+    }
+
     private fun boomKeyOf(info: EditorInfo?): String = (info?.packageName ?: "") + "/" + (info?.fieldId ?: 0)
 
     private fun boomStart() {
@@ -1810,7 +1823,8 @@ class RioBoardService : InputMethodService() {
         }
         boomMsg = msg
         boomKey = boomKeyOf(currentInputEditorInfo)
-        boomTotal = boomCounts[boomCountIdx]
+        boomTotal = boomCount
+        boomMethod = 0
         boomLeft = boomTotal
         boomChecking = false
         boomFails = 0
@@ -1837,8 +1851,12 @@ class RioBoardService : InputMethodService() {
                 boomLeft++
                 boomFails++
                 if (boomFails >= 2) {
-                    boomStop("Not sending. In WhatsApp turn on Settings > Chats > Enter is send, then try again")
-                    return
+                    boomFails = 0
+                    boomMethod++                 // try the next way of pressing send
+                    if (boomMethod > 2) {
+                        boomStop("Not sending. In WhatsApp turn on Settings > Chats > Enter is send, then try again")
+                        return
+                    }
                 }
             } else {
                 boomFails = 0
@@ -1848,11 +1866,11 @@ class RioBoardService : InputMethodService() {
             boomStop("Done: $boomTotal sent")
             return
         }
-        if (cur.trim() != boomMsg) {
+        if (cur != boomMsg) {
             // box is empty (after a send) or has something else: put exactly the message in it
             replaceWholeField(ic, f, boomMsg)
         }
-        pressEnter()
+        boomSend(ic)
         boomLeft--
         boomChecking = true
         boomSetStatus("Sent ${boomTotal - boomLeft}/$boomTotal")
@@ -1872,15 +1890,23 @@ class RioBoardService : InputMethodService() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(8), dp(2), dp(8), dp(10))
         }
-        box.addView(hintText("Type your message in the chat box, pick how many times, then press Start. Needs Enter to send in that app."))
+        box.addView(hintText("1) Type your message in the chat box   2) Pick how many times and the speed   3) Press Start. In WhatsApp turn on Settings > Chats > Enter is send."))
         box.addView(settingLabel("How many times"))
-        box.addView(chipRow(boomCounts.map { "${it}x" }, boomCountIdx) {
-            boomCountIdx = it
-            prefs.edit().putInt("boom_count", it).apply()
+        box.addView(chipRow(boomCounts.map { "${it}x" }, boomCounts.indexOf(boomCount)) {
+            boomCount = boomCounts[it]
+            prefs.edit().putInt("boom_n", boomCount).apply()
             render()
         })
-        box.addView(settingLabel("Speed"))
-        box.addView(chipRow(listOf("Fast", "Normal", "Slow"), boomDelayIdx) {
+        box.addView(chipRow(listOf("-10", "-1", "$boomCount times", "+1", "+10"), -1) {
+            val step = when (it) { 0 -> -10; 1 -> -1; 3 -> 1; 4 -> 10; else -> 0 }
+            if (step != 0) {
+                boomCount = (boomCount + step).coerceIn(1, 500)
+                prefs.edit().putInt("boom_n", boomCount).apply()
+                render()
+            }
+        })
+        box.addView(settingLabel("Speed (time between messages)"))
+        box.addView(chipRow(listOf("Fast 0.5s", "Normal 1s", "Slow 2s"), boomDelayIdx) {
             boomDelayIdx = it
             prefs.edit().putInt("boom_delay", it).apply()
             render()
