@@ -50,7 +50,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO, CALC, KEYSTYLE, NEWS, ART }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO, CALC, KEYSTYLE, NEWS, ART, GSEARCH, TRANSLATE }
 
     private class Key(
         val label: String,
@@ -410,6 +410,8 @@ class RioBoardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        try { gWeb?.destroy() } catch (e: Exception) { }
+        gWeb = null
         boomRunning = false
         handler.removeCallbacks(boomStep)
         hidePreview()
@@ -623,6 +625,7 @@ class RioBoardService : InputMethodService() {
     override fun onWindowHidden() {
         super.onWindowHidden()
         windowVisible = false
+        try { gWeb?.onPause() } catch (e: Exception) { }
         try {
             player?.pause()
         } catch (e: Exception) {
@@ -726,6 +729,8 @@ class RioBoardService : InputMethodService() {
             Panel.KEYSTYLE -> renderKeyStyle()
             Panel.NEWS -> renderNews()
             Panel.ART -> renderArt()
+            Panel.GSEARCH -> renderGSearch()
+            Panel.TRANSLATE -> renderTranslate()
             Panel.NONE -> {
                 if (numberRow) root.addView(row(numberKeys()))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -4022,31 +4027,190 @@ class RioBoardService : InputMethodService() {
         }
     }
 
+    // ----- Google search and translate, inside the keyboard -----
+    private var gWeb: android.webkit.WebView? = null
+    private var trSource = ""
+    private var trResult = ""
+    private var trStatus = ""
+    private var trTl = "si"
+    private var trWasSel = false
+    private var trReq = 0
+    private val trLangs = listOf(
+        "si" to "සිංහල", "en" to "English", "ta" to "தமிழ்", "hi" to "हिन्दी",
+        "fr" to "Français", "de" to "Deutsch", "es" to "Español", "ar" to "العربية"
+    )
+
     private fun googleSearch() {
         val q = googleQuery()
         if (q.isEmpty()) {
             toast("Type or select what to search first")
             return
         }
-        val web = Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, q)
-        if (!launch(web)) {
-            val url = "https://www.google.com/search?q=" + java.net.URLEncoder.encode(q, "UTF-8")
-            if (!launch(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))) toast("Could not open Google")
+        try {
+            val w = gWebView()
+            w.loadUrl("https://www.google.com/search?q=" + java.net.URLEncoder.encode(q, "UTF-8"))
+            panel = Panel.GSEARCH
+            render()
+        } catch (e: Exception) {
+            val web = Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, q)
+            if (!launch(web)) toast("Could not open Google")
         }
     }
 
-    /** Sinhala text -> English, anything else -> Sinhala. Opens Google Translate (app if installed, else browser). */
+    private fun gWebView(): android.webkit.WebView {
+        gWeb?.let { return it }
+        val w = android.webkit.WebView(this)
+        w.settings.javaScriptEnabled = true
+        w.settings.domStorageEnabled = true
+        w.settings.setSupportZoom(true)
+        w.webViewClient = object : android.webkit.WebViewClient() {}
+        gWeb = w
+        return w
+    }
+
+    private fun renderGSearch() {
+        root.addView(panelHeader("Google"))
+        val w = try { gWebView() } catch (e: Exception) { null }
+        if (w == null) {
+            root.addView(hintText("The web view is not available on this phone."))
+            return
+        }
+        root.addView(chipRow(listOf("\u25C0 Back", "\u21BB", "Link \u2192 chat", "Open"), -1) { i ->
+            when (i) {
+                0 -> if (w.canGoBack()) w.goBack() else { panel = Panel.NONE; render() }
+                1 -> w.reload()
+                2 -> {
+                    val url = w.url ?: ""
+                    if (url.isNotEmpty()) {
+                        currentInputConnection?.commitText(url, 1)
+                        panel = Panel.NONE
+                        render()
+                    }
+                }
+                3 -> {
+                    val url = w.url ?: ""
+                    if (url.isNotEmpty() && !launch(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))) toast("Could not open it")
+                }
+            }
+        })
+        (w.parent as? ViewGroup)?.removeView(w)
+        w.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH * 4) - dp(42))
+        try { w.onResume() } catch (e: Exception) { }
+        root.addView(w)
+    }
+
+    /** Selected text (or the whole text box) is translated and shown in the keyboard; Replace / Add below / Copy. */
     private fun googleTranslate() {
-        val q = googleQuery()
-        if (q.isEmpty()) {
+        val ic = currentInputConnection ?: return
+        flushSinglish()
+        val f = readField(ic)
+        val src = (if (f.sel.isNotEmpty()) f.sel else f.all).replace('\u200B', ' ').trim().take(1500)
+        if (src.isEmpty()) {
             toast("Type or select the text to translate first")
             return
         }
-        val hasSinhala = q.any { it in '\u0D80'..'\u0DFF' }
-        val tl = if (hasSinhala) "en" else "si"
-        val url = "https://translate.google.com/?sl=auto&tl=" + tl +
-            "&op=translate&text=" + java.net.URLEncoder.encode(q, "UTF-8")
-        if (!launch(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))) toast("Could not open Google Translate")
+        trSource = src
+        trWasSel = f.sel.isNotEmpty()
+        trResult = ""
+        trTl = if (src.any { it in '\u0D80'..'\u0DFF' }) "en" else "si"     // Sinhala -> English, anything else -> Sinhala
+        panel = Panel.TRANSLATE
+        render()
+        trRun()
+    }
+
+    private fun trRun() {
+        val id = ++trReq
+        val text = trSource
+        val tl = trTl
+        trResult = ""
+        trStatus = "Translating..."
+        if (panel == Panel.TRANSLATE) render()
+        Thread {
+            var out = ""
+            var err = ""
+            try {
+                val url = java.net.URL(
+                    "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=" + tl +
+                        "&dt=t&q=" + java.net.URLEncoder.encode(text, "UTF-8")
+                )
+                val c = url.openConnection() as java.net.HttpURLConnection
+                c.connectTimeout = 8000
+                c.readTimeout = 8000
+                c.setRequestProperty("User-Agent", "Mozilla/5.0")
+                val body = c.inputStream.bufferedReader().use { it.readText() }
+                val parts = JSONArray(body).getJSONArray(0)
+                val sb = StringBuilder()
+                for (i in 0 until parts.length()) {
+                    val p = parts.optJSONArray(i) ?: continue
+                    if (!p.isNull(0)) sb.append(p.getString(0))
+                }
+                out = sb.toString()
+                if (out.isEmpty()) err = "No translation"
+            } catch (e: Exception) {
+                err = "No internet, or Google did not answer"
+            }
+            handler.post {
+                if (id == trReq) {
+                    trResult = out
+                    trStatus = err
+                    if (panel == Panel.TRANSLATE) render()
+                }
+            }
+        }.start()
+    }
+
+    private fun renderTranslate() {
+        root.addView(panelHeader("Translate"))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(2), dp(8), dp(10))
+        }
+        trLangs.chunked(4).forEach { part ->
+            box.addView(chipRow(part.map { it.second }, part.indexOfFirst { it.first == trTl }) { i ->
+                trTl = part[i].first
+                trRun()
+            })
+        }
+        box.addView(TextView(this).apply {
+            text = trSource
+            setTextColor(th.hint)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            maxLines = 3
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(dp(6), dp(10), dp(6), dp(2))
+        })
+        box.addView(TextView(this).apply {
+            text = if (trResult.isNotEmpty()) trResult else trStatus
+            setTextColor(th.text)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            setPadding(dp(6), dp(4), dp(6), dp(10))
+        })
+        if (trResult.isNotEmpty()) {
+            box.addView(chipRow(listOf("Replace", "Add below", "Copy"), -1) { i ->
+                val ic = currentInputConnection
+                when (i) {
+                    0 -> if (ic != null) {
+                        val f = readField(ic)
+                        if (trWasSel && f.sel == trSource) ic.commitText(trResult, 1) else replaceWholeField(ic, f, trResult)
+                        panel = Panel.NONE
+                        render()
+                    }
+                    1 -> if (ic != null) {
+                        val f = readField(ic)
+                        val end = f.before.length + f.sel.length
+                        ic.setSelection(end, end)
+                        ic.commitText("\n" + trResult, 1)
+                        panel = Panel.NONE
+                        render()
+                    }
+                    2 -> {
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("RIO", trResult))
+                        toast("Copied")
+                    }
+                }
+            })
+        }
+        root.addView(panelBody(box))
     }
 
     /** Speak a search to Google (opens Google's voice search screen). */
