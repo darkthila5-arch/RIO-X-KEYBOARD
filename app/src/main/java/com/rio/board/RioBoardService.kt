@@ -563,6 +563,28 @@ class RioBoardService : InputMethodService() {
         slideIn()
     }
 
+    /**
+     * Phone Back button / back gesture: inside a panel (Settings, Tools, Emoji, Fonts ...) it goes back to the
+     * keyboard itself, instead of hiding the keyboard. On the normal keyboard it works as usual.
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK && panel != Panel.NONE) {
+            event?.startTracking()
+            return true
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK && panel != Panel.NONE && event?.isCanceled != true) {
+            flushSinglish()
+            panel = Panel.NONE
+            render()
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
+    }
+
     override fun onWindowHidden() {
         super.onWindowHidden()
         windowVisible = false
