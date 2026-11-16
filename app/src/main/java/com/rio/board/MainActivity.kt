@@ -369,7 +369,40 @@ class MainActivity : Activity() {
                 }
             }
         )
-        return pageOf(pageHeader("Typing", "Languages, toolbar, Singlish guide, shortcuts and styles"), languagesCard(), toolbarCard(), singlish, singlishGuideCard(), shortcuts, styles)
+        return pageOf(pageHeader("Typing", "Languages, toolbar, Singlish, animations, shortcuts and styles"), languagesCard(), toolbarCard(), singlish, singlishGuideCard(), wordFxCard(), shortcuts, styles)
+    }
+
+    // ------------------------------------------------------------------ word animations
+
+    private fun wordFxCard(): View {
+        val sw = Switch(this).apply {
+            text = "Play an animation when I type a word"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            isChecked = prefs.getBoolean("wordfx", true)
+            layoutParams = lp(top = 6)
+            setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean("wordfx", on).apply() }
+        }
+        val mine = field("birthday = \uD83C\uDF82\nbaba = \uD83D\uDC76", false).apply {
+            minLines = 3
+            gravity = Gravity.TOP
+            setText(prefs.getString("wfx_custom", ""))
+        }
+        return card(
+            title("\uD83D\uDC96  Word animations"),
+            note(
+                "Type a word and press space: love gives a big heart with small hearts floating up, haha gives laughing faces, " +
+                    "birthday a cake and balloons. Also: kiss, fire, thanks, sorry, good night, good morning, wow, congrats, rio and the Sinhala ආදරේ. " +
+                    "For the animation to fly over the whole screen (not only the keyboard) set the snow to full screen in the keyboard settings."
+            ),
+            sw,
+            tv("Your own words (one per line: word = emoji)", 13f, SUB, true).apply { setPadding(dp(4), dp(14), 0, dp(2)) },
+            mine,
+            btn("Save my words", false) {
+                prefs.edit().putString("wfx_custom", mine.text.toString().trim()).apply()
+                Toast.makeText(this@MainActivity, "Saved", Toast.LENGTH_SHORT).show()
+            }
+        )
     }
 
     // ------------------------------------------------------------------ Singlish guide

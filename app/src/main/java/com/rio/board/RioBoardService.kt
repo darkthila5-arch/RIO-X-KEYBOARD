@@ -297,6 +297,8 @@ class RioBoardService : InputMethodService() {
     private lateinit var root: LinearLayout
     private lateinit var barHolder: LinearLayout
     private lateinit var snow: EffectView
+    private lateinit var wordFx: WordFx
+    private var fxPrev = ""            // previous word, for two-word triggers (good night, happy birthday)
     private val handler = Handler(Looper.getMainLooper())
     private var themeCache: Theme? = null
     private var themeCacheIdx = -1
@@ -430,6 +432,7 @@ class RioBoardService : InputMethodService() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44))
         }
         snow = EffectView(this)
+        wordFx = WordFx(this)
         frame = FrameLayout(this)
         frame.addView(
             root,
@@ -441,6 +444,13 @@ class RioBoardService : InputMethodService() {
         )
         frame.addView(
             snow,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        frame.addView(
+            wordFx,
             FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -501,6 +511,7 @@ class RioBoardService : InputMethodService() {
         }
         toolsPinned = false
         loadPinned()               // picks up tools chosen in the app
+        fxPrev = ""
         sbuf.clear()
         undoCorr = null
         swipeCommitted = null
@@ -2422,6 +2433,11 @@ class RioBoardService : InputMethodService() {
         }
         box.addView(settingLabel("Typing"))
         box.addView(chipRow(listOf("English", "Singlish → සිංහල"), if (singlishOn) 1 else 0) { setSinglish(it == 1) })
+        box.addView(settingLabel("Word animations (love, birthday, haha ...)"))
+        box.addView(chipRow(listOf("On", "Off"), if (prefs.getBoolean("wordfx", true)) 0 else 1) {
+            prefs.edit().putBoolean("wordfx", it == 0).apply()
+            render()
+        })
         box.addView(settingLabel("Singlish: show the Sinhala letter above each key"))
         box.addView(chipRow(listOf("Show", "Hide"), if (singlishHints) 0 else 1) {
             singlishHints = it == 0
@@ -3393,6 +3409,7 @@ class RioBoardService : InputMethodService() {
         val prev = prevWordBefore(0)
         ic.commitText("$lead$best ", 1)
         learn(best)
+        checkWordFx(best)
         if (prev != null && lead.isEmpty()) learnBigram(prev, best)
         if (singlishOn) learnRoman(words[0])
         undoCorr = null
@@ -3679,6 +3696,17 @@ class RioBoardService : InputMethodService() {
         val o = JSONObject()
         for ((p, inner) in bigrams) o.put(p, JSONObject(inner.toMap()))
         prefs.edit().putString("bigrams", o.toString()).apply()
+    }
+
+    /** A finished word can play an animation (love -> big heart, haha -> laughing faces ...). */
+    private fun checkWordFx(word: String) {
+        val w = word.trim().trim('.', ',', '!', '?', '"', '\'', ':', ';', '(', ')').lowercase()
+        if (w.isEmpty()) return
+        val prev = fxPrev
+        fxPrev = w
+        if (!::wordFx.isInitialized || passwordField || !prefs.getBoolean("wordfx", true)) return
+        val fx = WordFxCatalog.find(prev, w, WordFxCatalog.custom(prefs)) ?: return
+        wordFx.play(fx)
     }
 
     private fun learnRoman(raw: String) {
@@ -4153,7 +4181,10 @@ class RioBoardService : InputMethodService() {
                     return
                 }
             }
-            if (isSep) learnRoman(raw)
+            if (isSep) {
+                learnRoman(raw)
+                checkWordFx(raw)
+            }
             flushSinglish()
         } else if (s == " " && fontStyle == 0 && expandSnip(currentPrefix(), false)) {
             return
@@ -4161,6 +4192,7 @@ class RioBoardService : InputMethodService() {
         // a space/punctuation ends a word -> remember it (and what followed what) for suggestions
         if (isSep) {
             val w = currentPrefix()
+            checkWordFx(w)
             if (w.length >= 3) learn(w)
             if (w.length >= 2) {
                 val prev = prevWordBefore(w.length)
