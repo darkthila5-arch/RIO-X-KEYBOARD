@@ -6,14 +6,15 @@ package com.rio.board
  *  t=ට T=ඨ th=ත Th=ථ d=ඩ D=ඪ dh=ද Dh=ධ n=න N=ණ nd=ඳ nD=ඬ
  *  p=ප ph=ඵ b=බ bh=භ m=ම mb=ඹ y=ය r=ර l=ල L=ළ w/v=ව s=ස sh=ශ S=ෂ h=හ f=ෆ
  *  vowels: a aa ae aae i ii u uu e ee ai o oo au
- *  R = ්‍ර  Y = ්‍ය  M = ං  H = ඃ
+ *  R = ්‍ර  Y = ්‍ය  M = ං  H = ඃ  Gn=ඥ
+ *  On the keyboard the spare keys give them directly: z = ්‍ර (rakaransaya), x = ්‍ය (yansaya), q = ං (bindu)
  */
 object Singlish {
     private val consonants: Map<String, String> = mapOf(
         "kh" to "ඛ", "gh" to "ඝ", "nG" to "ඞ", "ng" to "ඟ", "ch" to "ච", "Ch" to "ඡ",
         "jh" to "ඣ", "ny" to "ඤ", "nj" to "ඦ", "th" to "ත", "Th" to "ථ", "dh" to "ද",
         "Dh" to "ධ", "nd" to "ඳ", "nD" to "ඬ", "ph" to "ඵ", "bh" to "භ", "mb" to "ඹ",
-        "sh" to "ශ",
+        "sh" to "ශ", "Gn" to "ඥ",
         "k" to "ක", "g" to "ග", "c" to "ච", "j" to "ජ", "t" to "ට", "T" to "ඨ",
         "d" to "ඩ", "D" to "ඪ", "n" to "න", "N" to "ණ", "p" to "ප", "b" to "බ",
         "m" to "ම", "y" to "ය", "r" to "ර", "l" to "ල", "L" to "ළ", "w" to "ව",

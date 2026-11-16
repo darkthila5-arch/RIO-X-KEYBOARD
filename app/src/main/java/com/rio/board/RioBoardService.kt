@@ -2548,7 +2548,7 @@ class RioBoardService : InputMethodService() {
                 val label = if (upper) c.uppercaseChar().toString() else c.toString()
                 val digit = if (topRow && !numberRow) "1234567890"[i] else null
                 Key(label, alts = altsFor(c, digit, upper), letter = c, hint = singlishHintFor(c, upper)) {
-                    typeLetter(label)
+                    typeLetter(singlishSend(c, label))
                     if (shift == 1) {
                         shift = 0
                         render()
@@ -3140,9 +3140,10 @@ class RioBoardService : InputMethodService() {
 
     /** With Singlish on, the popups give the capital-letter sounds (T=ඨ, N=ණ, L=ළ ...). */
     private val singlishAlts: Map<Char, List<String>> = mapOf(
-        't' to listOf("T", "Th"), 'd' to listOf("D", "Dh"), 'n' to listOf("N", "nG"),
+        't' to listOf("T", "Th"), 'd' to listOf("D", "Dh"), 'n' to listOf("N", "nG", "ny"),
         'l' to listOf("L"), 's' to listOf("S", "sh"), 'm' to listOf("M"), 'h' to listOf("H"),
-        'r' to listOf("R"), 'y' to listOf("Y"), 'c' to listOf("Ch"), 'g' to listOf("gh", "ng"),
+        'r' to listOf("R"), 'y' to listOf("Y"), 'c' to listOf("Ch"), 'g' to listOf("gh", "ng", "Gn"),
+        'q' to listOf("H"), 'x' to listOf("ny", "Gn"), 'z' to listOf("nG", "nj"),
         'k' to listOf("kh"), 'p' to listOf("ph"), 'b' to listOf("bh"), 'j' to listOf("jh")
     )
 
@@ -3156,12 +3157,24 @@ class RioBoardService : InputMethodService() {
     private val singlishHintLower: Map<Char, String> = mapOf(
         'a' to "අ", 'b' to "බ", 'c' to "ච", 'd' to "ඩ", 'e' to "එ", 'f' to "ෆ", 'g' to "ග", 'h' to "හ",
         'i' to "ඉ", 'j' to "ජ", 'k' to "ක", 'l' to "ල", 'm' to "ම", 'n' to "න", 'o' to "ඔ", 'p' to "ප",
-        'r' to "ර", 's' to "ස", 't' to "ට", 'u' to "උ", 'v' to "ව", 'w' to "ව", 'y' to "ය"
+        'r' to "ර", 's' to "ස", 't' to "ට", 'u' to "උ", 'v' to "ව", 'w' to "ව", 'y' to "ය",
+        'q' to "ං", 'x' to "ක්\u200Dය", 'z' to "ක්\u200Dර"      // spare keys: bindu, yansaya, rakaransaya
     )
     private val singlishHintShift: Map<Char, String> = mapOf(
         't' to "ඨ", 'd' to "ඪ", 'n' to "ණ", 'l' to "ළ", 's' to "ෂ", 'm' to "ං", 'h' to "ඃ",
         'r' to "ක්\u200Dර", 'y' to "ක්\u200Dය"
     )
+
+    /** In Singlish the keys that English words need but Sinhala does not (q, x, z) type bindu, yansaya and rakaransaya. */
+    private fun singlishSend(c: Char, label: String): String {
+        if (!singlishOn || passwordField) return label
+        return when (c) {
+            'q' -> "M"
+            'x' -> "Y"
+            'z' -> "R"
+            else -> label
+        }
+    }
 
     private fun singlishHintFor(c: Char, upper: Boolean): String? {
         if (!singlishOn || !singlishHints || passwordField || fontStyle != 0) return null
