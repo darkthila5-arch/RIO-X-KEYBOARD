@@ -323,7 +323,7 @@ class RioBoardService : InputMethodService() {
         snowColorIdx = prefs.getInt("snowcol", 0).coerceIn(0, snowPalette.size - 1)
         effectIdx = prefs.getInt("effect", 0).coerceIn(0, EffectView.Type.values().size - 1)
         loadPinned()
-        keyTpl = prefs.getInt("ktpl", 0).coerceIn(0, KeyStyles.templates.size - 1)
+        keyTpl = prefs.getInt("ktpl", 0).let { if (it in KeyStyles.codes) it else 0 }   // removed styles fall back to Classic
         keyDecor = prefs.getInt("kdecor", 0).coerceIn(0, KeyStyles.decors.size - 1)
         haptic = prefs.getBoolean("haptic", true)
         hapticLevel = prefs.getInt("hapticlvl", if (haptic) 2 else 0).coerceIn(0, 3)
@@ -1111,30 +1111,64 @@ class RioBoardService : InputMethodService() {
         if (keyTpl == 0 && keyDecor == 0) return roundBg(color, 8)
         val dens = resources.displayMetrics.density
         val seed = label.hashCode()
-        var up = kc(color)
-        var down = kc(th.pressed)
-        if (keyTpl == KeyStyles.KAWAII) {
-            // the Kawaii template brings its own pink colours (works with any theme)
-            val strong = color == th.accent || color == th.active
-            val soft = color == th.special
-            up = if (strong) 0xFFFF5C9A.toInt() else if (soft) 0xFFFFA9CC.toInt() else 0xFFFFC9DF.toInt()
-            down = if (strong) 0xFFFF3D85.toInt() else if (soft) 0xFFFF8FBC.toInt() else 0xFFFFAECB.toInt()
-        }
-        if (keyTpl == KeyStyles.PLUSH) {
-            // plush fur: white and pink keys, deeper pink for special keys, rose for enter
-            val strong = color == th.accent || color == th.active
-            val soft = color == th.special
-            val white = (seed and 1) == 0
-            up = if (strong) 0xFFFF86B3.toInt() else if (soft) 0xFFFFA8CB.toInt() else if (white) 0xFFFFF4F8.toInt() else 0xFFFFB3D2.toInt()
-            down = if (strong) 0xFFEE6D9F.toInt() else if (soft) 0xFFF28DB6.toInt() else if (white) 0xFFF6D9E5.toInt() else 0xFFF29BBE.toInt()
-        }
+        // Frost / Sci-Fi / Neon take their outline colour from the background picture or video
+        // (or from the theme when there is none)
+        val ka = if (keyTpl == 1 || keyTpl == 3 || keyTpl == 6) keyAccent() else th.accent
         return StateListDrawable().apply {
             addState(
                 intArrayOf(android.R.attr.state_pressed),
-                KeyDrawable(dens, keyTpl, down, th.accent, true, keyDecor, seed)
+                KeyDrawable(dens, keyTpl, kc(th.pressed), ka, true, keyDecor, seed)
             )
-            addState(intArrayOf(), KeyDrawable(dens, keyTpl, up, th.accent, false, keyDecor, seed))
+            addState(intArrayOf(), KeyDrawable(dens, keyTpl, kc(color), ka, false, keyDecor, seed))
         }
+    }
+
+    private var kaKey = ""
+    private var kaVal = 0
+
+    /** Bright, vivid colour of the current background photo/video; the theme accent when there is no background. */
+    private fun keyAccent(): Int {
+        val photo = if (bgOn) bgBitmap else null
+        val bmp: Bitmap? = photo ?: videoName?.let { AnimatedBackgrounds.thumb(this, it) }
+        if (bmp == null) return th.accent
+        val key = if (photo != null) "p" + System.identityHashCode(photo) else "v" + videoName
+        if (key == kaKey) return kaVal
+        val v = try {
+            vividColorOf(bmp)
+        } catch (e: Exception) {
+            null
+        } catch (e: OutOfMemoryError) {
+            null
+        }
+        if (v == null) return th.accent
+        kaKey = key
+        kaVal = v
+        return v
+    }
+
+    /** Average of the most colourful pixels, pushed to a bright, saturated colour. Null for grey pictures. */
+    private fun vividColorOf(b: Bitmap): Int? {
+        val sm = Bitmap.createScaledBitmap(b, 40, 40, true)
+        val px = IntArray(40 * 40)
+        sm.getPixels(px, 0, 40, 0, 0, 40, 40)
+        val hsv = FloatArray(3)
+        var sr = 0.0
+        var sg = 0.0
+        var sb = 0.0
+        var ws = 0.0
+        for (p in px) {
+            Color.colorToHSV(p, hsv)
+            val w = (hsv[1] * hsv[1] * hsv[2]).toDouble()      // vivid and bright pixels count most
+            sr += Color.red(p) * w
+            sg += Color.green(p) * w
+            sb += Color.blue(p) * w
+            ws += w
+        }
+        if (ws < 3.0) return null
+        Color.colorToHSV(Color.rgb((sr / ws).toInt(), (sg / ws).toInt(), (sb / ws).toInt()), hsv)
+        hsv[1] = maxOf(hsv[1], 0.55f)
+        hsv[2] = maxOf(hsv[2], 0.95f)
+        return Color.HSVToColor(hsv)
     }
 
     // ----- key style panel: live sample keys + template and decoration pickers -----
@@ -1164,8 +1198,8 @@ class RioBoardService : InputMethodService() {
             }
         }
         box.addView(settingLabel("Template"))
-        pick(KeyStyles.templates, keyTpl) {
-            keyTpl = it
+        pick(KeyStyles.templates, KeyStyles.codes.indexOf(keyTpl)) {
+            keyTpl = KeyStyles.codes[it]
             prefs.edit().putInt("ktpl", keyTpl).apply()
             render()
         }
@@ -2570,25 +2604,6 @@ class RioBoardService : InputMethodService() {
         if (k.space) {
             tv.letterSpacing = 0.2f
             tv.typeface = Typeface.DEFAULT_BOLD
-        }
-        if (keyTpl == KeyStyles.PLUSH) {
-            // Plush keys: motif in the middle, small soft pink letter at the bottom
-            if (!k.space) {
-                tv.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                tv.setPadding(0, 0, 0, dp(7))
-                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, k.textSp * 0.8f)
-            }
-            tv.typeface = Typeface.DEFAULT_BOLD
-            if (k.style != Style.ACCENT && k.style != Style.ACTIVE) tv.setTextColor(0xFFC2457F.toInt())
-        }
-        if (keyTpl == KeyStyles.KAWAII) {
-            // Kawaii keys: the big motif sits top right, the letter bottom left in deep rose
-            if (!k.space) {
-                tv.gravity = Gravity.BOTTOM or Gravity.START
-                tv.setPadding(dp(6), 0, 0, dp(5))
-            }
-            tv.typeface = Typeface.DEFAULT_BOLD
-            if (k.style != Style.ACCENT && k.style != Style.ACTIVE) tv.setTextColor(0xFF8A2552.toInt())
         }
         tv.background = keyBg(
             when (k.style) {
