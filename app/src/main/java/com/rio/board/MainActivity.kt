@@ -369,7 +369,94 @@ class MainActivity : Activity() {
                 }
             }
         )
-        return pageOf(pageHeader("Typing", "Languages, toolbar, Singlish, shortcuts and styles"), languagesCard(), toolbarCard(), singlish, shortcuts, styles)
+        return pageOf(pageHeader("Typing", "Languages, toolbar, Singlish guide, shortcuts and styles"), languagesCard(), toolbarCard(), singlish, singlishGuideCard(), shortcuts, styles)
+    }
+
+    // ------------------------------------------------------------------ Singlish guide
+
+    private fun guideChips(pairs: List<Pair<String, String>>): View {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        pairs.chunked(4).forEach { part ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = lp(top = 6)
+            }
+            part.forEach { (keys, sinhala) ->
+                row.addView(TextView(this).apply {
+                    text = "$keys  $sinhala"
+                    gravity = Gravity.CENTER
+                    maxLines = 1
+                    setTextColor(Color.WHITE)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                    background = bg(FIELD, 10)
+                    setPadding(dp(2), dp(9), dp(2), dp(9))
+                    layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f).apply { setMargins(dp(3), 0, dp(3), 0) }
+                })
+            }
+            repeat(4 - part.size) { row.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) }) }
+            col.addView(row)
+        }
+        return col
+    }
+
+    private fun guideLabel(s: String): TextView = tv(s, 13f, SUB, true).apply { setPadding(dp(4), dp(14), 0, dp(2)) }
+
+    private fun singlishGuideCard(): View {
+        // try it: type Singlish with any keyboard and see the Sinhala straight away
+        val result = tv("සිංහල මෙතන පෙනේ", 20f, Color.WHITE, true).apply {
+            background = bg(FIELD, 12)
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            layoutParams = lp(top = 8)
+            setTextIsSelectable(true)
+        }
+        val input = field("Try it: mama gedhara yanawaa", false).apply {
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS      // no auto capital letters: they matter in Singlish
+            minLines = 2
+            gravity = Gravity.TOP
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    val t = s?.toString().orEmpty()
+                    result.text = if (t.isEmpty()) "සිංහල මෙතන පෙනේ" else Singlish.fromKeys(t)
+                }
+            })
+        }
+
+        val vowels = listOf(
+            "a" to "අ", "aa" to "ආ", "ae" to "ඇ", "aae" to "ඈ", "i" to "ඉ", "ii" to "ඊ", "u" to "උ", "uu" to "ඌ",
+            "e" to "එ", "ee" to "ඒ", "o" to "ඔ", "oo" to "ඕ", "ai" to "ඓ", "au" to "ඖ"
+        )
+        val cons = listOf(
+            "k" to "ක", "kh" to "ඛ", "g" to "ග", "gh" to "ඝ", "ng" to "ඟ", "nG" to "ඞ", "c" to "ච", "Ch" to "ඡ",
+            "j" to "ජ", "jh" to "ඣ", "ny" to "ඤ", "nj" to "ඦ", "Gn" to "ඥ", "t" to "ට", "T" to "ඨ", "d" to "ඩ",
+            "D" to "ඪ", "N" to "ණ", "nD" to "ඬ", "th" to "ත", "Th" to "ථ", "dh" to "ද", "Dh" to "ධ", "n" to "න",
+            "nd" to "ඳ", "p" to "ප", "ph" to "ඵ", "b" to "බ", "bh" to "භ", "m" to "ම", "mb" to "ඹ", "y" to "ය",
+            "r" to "ර", "l" to "ල", "L" to "ළ", "w" to "ව", "s" to "ස", "sh" to "ශ", "S" to "ෂ", "h" to "හ", "f" to "ෆ"
+        )
+        val special = listOf(
+            "q" to "ං", "H" to "ඃ", "x" to "්‍ය", "z" to "්‍ර"
+        )
+        return card(
+            title("\uD83D\uDCD6  Singlish guide"),
+            note(
+                "Type English letters and the keyboard writes Sinhala (turn Singlish on with the A→අ tool or the Typing setting). " +
+                    "Small letters are the light sounds, CAPITAL letters or an h are the heavy ones: t = ට, T = ඨ, th = ත, d = ඩ, dh = ද. " +
+                    "A letter alone gives the consonant with a, add aa for ආ: ka = ක, kaa = කා, ki = කි."
+            ),
+            input, result,
+            guideLabel("Vowels"), guideChips(vowels),
+            guideLabel("Consonants"), guideChips(cons),
+            guideLabel("Special keys"), guideChips(special),
+            note(
+                "q = bindu (ං), x = yansaya (type after a letter: kx = ක්‍ය), z = rakaransaya (kz = ක්‍ර), H = visarga (ඃ). For bindu after a letter write the vowel first: kaq = කං. Capital R after a letter also gives rakaransaya (shR = ශ්‍ර). " +
+                    "Hold a key on the keyboard to see more letters (hold n for ණ ඞ ඤ, hold g for ඝ ඟ ඥ)."
+            ).apply { setPadding(dp(4), dp(10), 0, 0) },
+            guideLabel("Examples"),
+            note("mama gedhara yanawaa  →  මම ගෙදර යනවා\nshRii laqkaawa  →  ශ්‍රී ලංකාව\nkx  →  ක්‍ය      kz  →  ක්‍ර      kaq  →  කං")
+        )
     }
 
     // ------------------------------------------------------------------ keyboard toolbar picker

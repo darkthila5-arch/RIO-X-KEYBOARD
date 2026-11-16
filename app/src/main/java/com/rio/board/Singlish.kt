@@ -49,6 +49,22 @@ object Singlish {
         return sb.toString()
     }
 
+    /** Same as the keyboard: q = bindu, x = yansaya, z = rakaransaya, then convert. Used by the Singlish guide in the app. */
+    fun fromKeys(raw: String): String {
+        val sb = StringBuilder()
+        for (c in raw) {
+            sb.append(
+                when (c) {
+                    'q', 'Q' -> 'M'
+                    'x', 'X' -> 'Y'
+                    'z', 'Z' -> 'R'
+                    else -> c
+                }
+            )
+        }
+        return convert(sb.toString())
+    }
+
     fun convert(raw: String): String {
         val s = normalize(raw)
         val out = StringBuilder()
