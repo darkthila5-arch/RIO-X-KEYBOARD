@@ -780,6 +780,9 @@ class RioBoardService : InputMethodService() {
             ic("calc", "Calculator", 1, IconView.Kind.CALC, { panel == Panel.CALC }) { openCalc() },
             ic("lock", "Secret message", 1, IconView.Kind.LOCK, { panel == Panel.CRYPTO }) { togglePanel(Panel.CRYPTO) },
             tx("wcount", "Word count", 1, "#W", 13f) { wordCount() },
+            tx("gsearch", "Google search", 1, "G", 18f) { googleSearch() },
+            tx("gtrans", "Google Translate", 1, "\u6587A", 14f) { googleTranslate() },
+            tx("gvoice", "Google voice search", 1, "G\uD83C\uDFA4", 12f) { googleVoice() },
             tx("mock", "sPoNgE text", 1, "aBc", 13f) { mockText() },
             tx("flip", "Upside down", 1, "\u0250q", 14f) { flipText() },
             tx("spaced", "S P A C E D", 1, "A B", 13f) { spacedText() },
@@ -3833,6 +3836,61 @@ class RioBoardService : InputMethodService() {
         val msg = "$words words \u00B7 $chars characters" + (if (hasSel) " (selected)" else "")
         toast(msg)
         showBarMsg(msg)
+    }
+
+    // ---------- Google tools ----------
+    /** Selected text, else the whole text in the box (max 500 chars). */
+    private fun googleQuery(): String {
+        val ic = currentInputConnection ?: return ""
+        flushSinglish()
+        val f = readField(ic)
+        val s = if (f.sel.isNotEmpty()) f.sel else f.all
+        return s.replace('\u200B', ' ').trim().take(500)
+    }
+
+    private fun launch(i: Intent): Boolean {
+        return try {
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun googleSearch() {
+        val q = googleQuery()
+        if (q.isEmpty()) {
+            toast("Type or select what to search first")
+            return
+        }
+        val web = Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, q)
+        if (!launch(web)) {
+            val url = "https://www.google.com/search?q=" + java.net.URLEncoder.encode(q, "UTF-8")
+            if (!launch(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))) toast("Could not open Google")
+        }
+    }
+
+    /** Sinhala text -> English, anything else -> Sinhala. Opens Google Translate (app if installed, else browser). */
+    private fun googleTranslate() {
+        val q = googleQuery()
+        if (q.isEmpty()) {
+            toast("Type or select the text to translate first")
+            return
+        }
+        val hasSinhala = q.any { it in '\u0D80'..'\u0DFF' }
+        val tl = if (hasSinhala) "en" else "si"
+        val url = "https://translate.google.com/?sl=auto&tl=" + tl +
+            "&op=translate&text=" + java.net.URLEncoder.encode(q, "UTF-8")
+        if (!launch(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))) toast("Could not open Google Translate")
+    }
+
+    /** Speak a search to Google (opens Google's voice search screen). */
+    private fun googleVoice() {
+        val i = Intent(android.speech.RecognizerIntent.ACTION_WEB_SEARCH)
+        if (!launch(i)) {
+            if (!launch(Intent(Intent.ACTION_VOICE_COMMAND))) toast("Google voice search is not available on this phone")
+        }
     }
 
     private fun mockText() = transformText { src ->

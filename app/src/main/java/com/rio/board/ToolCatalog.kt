@@ -23,6 +23,8 @@ object ToolCatalog {
             Item("case", "a\u21C4A", "Change case"), Item("readmore", "\u22EF", "Read more"),
             Item("date", "\uD83D\uDCC5", "Date & time"), Item("calc", "\uD83E\uDDEE", "Calculator"),
             Item("lock", "\uD83D\uDD12", "Secret message"), Item("wcount", "#W", "Word count"),
+            Item("gsearch", "G", "Google search"), Item("gtrans", "\u6587A", "Translate"),
+            Item("gvoice", "G\uD83C\uDFA4", "Google voice"),
             Item("mock", "aBc", "sPoNgE"), Item("flip", "\u0250q", "Upside down"),
             Item("spaced", "A B", "S P A C E D"), Item("clap", "\uD83D\uDC4F", "Clap text"),
             Item("blank", "[ ]", "Blank message"), Item("divider", "\u2501\u2726\u2501", "Fancy art")
