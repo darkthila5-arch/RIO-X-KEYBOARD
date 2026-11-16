@@ -881,16 +881,19 @@ class RioBoardService : InputMethodService() {
 
     /** All tools except the ones the admin switched off (RemoteConfig flags.disabled). Settings/emoji/language can not be switched off. */
     private val toolList: List<Tool>
-        get() = allTools.filter { it.id !in remoteCfg.disabled || it.id in alwaysOn }
+        get() = allTools.filter { it.id in alwaysOn || (it.id !in remoteCfg.disabled && it.id !in toolsOff) }
+    private var toolsOff: Set<String> = emptySet()      // switched off by the user in the app (Typing -> Tools on / off)
 
     private val alwaysOn = setOf("settings", "emoji", "lang", "singlish", "news")
 
     private fun toolById(id: String): Tool? = toolList.firstOrNull { it.id == id }
 
     private fun loadPinned() {
+        toolsOff = (prefs.getString("tools_off", "") ?: "").split(",").filter { it.isNotEmpty() }.toSet()
         val raw = prefs.getString("pinned", null)?.split(",")
             ?.filter { toolById(it) != null }?.distinct()?.toMutableList() ?: mutableListOf()
         if (raw.isEmpty()) raw.addAll(defaultPinned.filter { toolById(it) != null })
+        if (raw.isEmpty()) raw.addAll(toolList.take(6).map { it.id })       // everything chosen is switched off: never leave the bar empty
         pinned = ArrayList(raw.take(30))      // chosen in the app (Typing -> Keyboard toolbar) or dragged here
     }
 

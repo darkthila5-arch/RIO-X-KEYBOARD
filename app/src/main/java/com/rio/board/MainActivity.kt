@@ -44,6 +44,7 @@ class MainActivity : Activity() {
     private lateinit var snipList: LinearLayout
     private lateinit var styleList: LinearLayout
     private lateinit var toolPicker: LinearLayout
+    private lateinit var toolOnOff: LinearLayout
     private lateinit var setupBox: LinearLayout
     private lateinit var updateBox: LinearLayout
     private var density = 1f
@@ -369,7 +370,7 @@ class MainActivity : Activity() {
                 }
             }
         )
-        return pageOf(pageHeader("Typing", "Languages, toolbar, Singlish, animations, shortcuts and styles"), languagesCard(), toolbarCard(), singlish, singlishGuideCard(), wordFxCard(), shortcuts, styles)
+        return pageOf(pageHeader("Typing", "Languages, tools, Singlish, animations, shortcuts and styles"), languagesCard(), toolbarCard(), toolsOnOffCard(), singlish, singlishGuideCard(), wordFxCard(), shortcuts, styles)
     }
 
     // ------------------------------------------------------------------ word animations
@@ -492,6 +493,58 @@ class MainActivity : Activity() {
         )
     }
 
+    // ------------------------------------------------------------------ tools on / off
+
+    private fun toolsOnOffCard(): View {
+        toolOnOff = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        refreshToolsOnOff()
+        return card(
+            title("\uD83D\uDD0C  Tools on / off"),
+            note(
+                "Switch a tool ON and it shows in the keyboard. Switch it OFF and it is hidden everywhere in the keyboard " +
+                    "(the top bar and the all-tools grid). Changes work the next time the keyboard opens."
+            ),
+            toolOnOff,
+            btn("Turn all tools on", false) {
+                ToolCatalog.saveOff(prefs, emptySet())
+                refreshToolsOnOff()
+                refreshToolPicker()
+            }
+        )
+    }
+
+    private fun refreshToolsOnOff() {
+        val off = ToolCatalog.off(prefs)
+        toolOnOff.removeAllViews()
+        ToolCatalog.groups.forEach { (name, items) ->
+            toolOnOff.addView(guideLabel(name))
+            items.forEach { it0 ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(4), dp(3), dp(4), dp(3))
+                }
+                row.addView(tv(it0.glyph + "   " + it0.label, 15f, Color.WHITE).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+                })
+                if (it0.id in ToolCatalog.locked) {
+                    row.addView(tv("always on", 12f, SUB))
+                } else {
+                    row.addView(Switch(this).apply {
+                        isChecked = it0.id !in off
+                        setOnCheckedChangeListener { _, on ->
+                            val now = ToolCatalog.off(prefs)
+                            if (on) now.remove(it0.id) else now.add(it0.id)
+                            ToolCatalog.saveOff(prefs, now)
+                            refreshToolPicker()
+                        }
+                    })
+                }
+                toolOnOff.addView(row)
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ keyboard toolbar picker
 
     private fun toolbarCard(): View {
@@ -541,6 +594,7 @@ class MainActivity : Activity() {
                         if (on) typeface = Typeface.DEFAULT_BOLD
                         setPadding(dp(4), dp(10), dp(4), dp(10))
                         background = if (on) buttonBg(true, 12) else bg(FIELD, 12)
+                        alpha = if (it0.id in ToolCatalog.off(prefs)) 0.35f else 1f     // switched off in Tools on / off
                         layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f).apply { setMargins(dp(3), 0, dp(3), 0) }
                         setOnClickListener {
                             val now = ToolCatalog.load(prefs)

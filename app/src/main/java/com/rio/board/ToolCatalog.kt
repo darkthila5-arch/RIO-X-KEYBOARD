@@ -48,6 +48,17 @@ object ToolCatalog {
         )
     )
 
+    /** These can not be switched off (same list the keyboard keeps always on). */
+    val locked = setOf("settings", "emoji", "lang", "singlish", "news")
+
+    /** Tools the user switched OFF in the app (hidden everywhere in the keyboard). */
+    fun off(prefs: SharedPreferences): MutableSet<String> =
+        (prefs.getString("tools_off", "") ?: "").split(",").filter { it.isNotEmpty() && it !in locked }.toMutableSet()
+
+    fun saveOff(prefs: SharedPreferences, ids: Set<String>) {
+        prefs.edit().putString("tools_off", ids.joinToString(",")).apply()
+    }
+
     val defaults = listOf("singlish", "emoji", "sticker", "clip", "fonts", "voice")
 
     private val valid: Set<String> by lazy { groups.flatMap { g -> g.second.map { it.id } }.toSet() }
