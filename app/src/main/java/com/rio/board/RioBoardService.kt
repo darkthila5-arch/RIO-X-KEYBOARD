@@ -62,8 +62,25 @@ class RioBoardService : InputMethodService() {
         val onLong: (() -> Unit)? = null,
         val alts: List<String> = emptyList(),   // long-press popup choices
         val letter: Char? = null,               // set on English letter keys (swipe typing)
+        val hint: String? = null,               // small Sinhala letter shown above the key in Singlish mode
         val onPress: () -> Unit
     )
+
+    /** A key label that can also draw a small hint (the Sinhala letter) above itself. */
+    private class HintTextView(ctx: Context) : TextView(ctx) {
+        var hintText: String? = null
+        var hintColor: Int = Color.GRAY
+        var hintSizePx: Float = 24f
+        private val hp = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val h = hintText ?: return
+            hp.color = hintColor
+            hp.textSize = hintSizePx
+            canvas.drawText(h, width / 2f, hintSizePx + height * 0.06f, hp)
+        }
+    }
 
     /** Thin line that follows the finger while swipe-typing. */
     private class TrailView(ctx: Context) : View(ctx) {
@@ -251,6 +268,7 @@ class RioBoardService : InputMethodService() {
     private val clips = ArrayList<String>()
     private val learned = HashMap<String, Int>()
     private var singlishOn = false     // English keys -> Sinhala letters
+    private var singlishHints = true   // show the Sinhala letter above each key while Singlish is on
     private val sbuf = StringBuilder() // raw Singlish letters being composed
     private var lastComposeMs = 0L
     private var fontStyle = 0          // 0 = normal, see Fonts.names
@@ -340,6 +358,7 @@ class RioBoardService : InputMethodService() {
         boomDelayIdx = prefs.getInt("boom_delay", 1).coerceIn(0, boomDelays.size - 1)
         keyHIdx = prefs.getInt("keyh", 1).coerceIn(0, 2)
         singlishOn = prefs.getBoolean("singlish", false)
+        singlishHints = prefs.getBoolean("singlish_hints", true)
         swipeOn = prefs.getBoolean("swipe", true)
         autoCorrect = prefs.getBoolean("autocorrect", true)
         nextWordOn = prefs.getBoolean("nextword", true)
@@ -2377,6 +2396,12 @@ class RioBoardService : InputMethodService() {
         }
         box.addView(settingLabel("Typing"))
         box.addView(chipRow(listOf("English", "Singlish → සිංහල"), if (singlishOn) 1 else 0) { setSinglish(it == 1) })
+        box.addView(settingLabel("Singlish: show the Sinhala letter above each key"))
+        box.addView(chipRow(listOf("Show", "Hide"), if (singlishHints) 0 else 1) {
+            singlishHints = it == 0
+            prefs.edit().putBoolean("singlish_hints", singlishHints).apply()
+            render()
+        })
         box.addView(settingLabel("Background photo"))
         box.addView(chipRow(listOf("Choose photo", "Remove"), -1) {
             if (it == 0) {
@@ -2496,7 +2521,7 @@ class RioBoardService : InputMethodService() {
             fun letters(s: String, topRow: Boolean = false) = s.mapIndexed { i, c ->
                 val label = if (upper) c.uppercaseChar().toString() else c.toString()
                 val digit = if (topRow && !numberRow) "1234567890"[i] else null
-                Key(label, alts = altsFor(c, digit, upper), letter = c) {
+                Key(label, alts = altsFor(c, digit, upper), letter = c, hint = singlishHintFor(c, upper)) {
                     typeLetter(label)
                     if (shift == 1) {
                         shift = 0
@@ -2873,8 +2898,13 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun keyView(k: Key): View {
-        val tv = TextView(this)
+        val tv = HintTextView(this)
         tv.text = k.label
+        if (k.hint != null) {
+            tv.hintText = k.hint
+            tv.hintColor = (th.hint and 0x00FFFFFF) or (0xCC shl 24)
+            tv.hintSizePx = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 9.5f, resources.displayMetrics)
+        }
         tv.gravity = Gravity.CENTER
         tv.maxLines = 1
         tv.includeFontPadding = false
@@ -3094,6 +3124,22 @@ class RioBoardService : InputMethodService() {
         Key(c.toString(), alts = if (popupsOn) digitAlts[c].orEmpty() else emptyList()) {
             type(styled(c.toString()))
         }
+    }
+
+    // Sinhala letter each English key gives in Singlish (small hint above the key)
+    private val singlishHintLower: Map<Char, String> = mapOf(
+        'a' to "අ", 'b' to "බ", 'c' to "ච", 'd' to "ඩ", 'e' to "එ", 'f' to "ෆ", 'g' to "ග", 'h' to "හ",
+        'i' to "ඉ", 'j' to "ජ", 'k' to "ක", 'l' to "ල", 'm' to "ම", 'n' to "න", 'o' to "ඔ", 'p' to "ප",
+        'r' to "ර", 's' to "ස", 't' to "ට", 'u' to "උ", 'v' to "ව", 'w' to "ව", 'y' to "ය"
+    )
+    private val singlishHintShift: Map<Char, String> = mapOf(
+        't' to "ඨ", 'd' to "ඪ", 'n' to "ණ", 'l' to "ළ", 's' to "ෂ", 'm' to "ං", 'h' to "ඃ",
+        'r' to "ක්\u200Dර", 'y' to "ක්\u200Dය"
+    )
+
+    private fun singlishHintFor(c: Char, upper: Boolean): String? {
+        if (!singlishOn || !singlishHints || passwordField || fontStyle != 0) return null
+        return (if (upper) singlishHintShift[c] else null) ?: singlishHintLower[c]
     }
 
     private fun altsFor(c: Char, digit: Char?, upper: Boolean): List<String> {
