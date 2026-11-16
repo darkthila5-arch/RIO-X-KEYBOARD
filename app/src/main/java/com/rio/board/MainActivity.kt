@@ -43,6 +43,7 @@ class MainActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var snipList: LinearLayout
     private lateinit var styleList: LinearLayout
+    private lateinit var toolPicker: LinearLayout
     private lateinit var setupBox: LinearLayout
     private lateinit var updateBox: LinearLayout
     private var density = 1f
@@ -368,7 +369,82 @@ class MainActivity : Activity() {
                 }
             }
         )
-        return pageOf(pageHeader("Typing", "Languages, Singlish, shortcuts and styles"), languagesCard(), singlish, shortcuts, styles)
+        return pageOf(pageHeader("Typing", "Languages, toolbar, Singlish, shortcuts and styles"), languagesCard(), toolbarCard(), singlish, shortcuts, styles)
+    }
+
+    // ------------------------------------------------------------------ keyboard toolbar picker
+
+    private fun toolbarCard(): View {
+        toolPicker = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        refreshToolPicker()
+        val all = Switch(this).apply {
+            text = "Show the other tools at the end of the bar"
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            isChecked = ToolCatalog.showAll(prefs)
+            layoutParams = lp(top = 10)
+            setOnCheckedChangeListener { _, on -> prefs.edit().putBoolean("bar_all", on).apply() }
+        }
+        return card(
+            title("\uD83E\uDDF0  Keyboard toolbar"),
+            note(
+                "Tap the tools you want on the top bar of the keyboard. The number shows the order. " +
+                    "Tap again to remove. Swipe the bar sideways on the keyboard to see them all. Changes work the next time the keyboard opens."
+            ),
+            toolPicker, all,
+            btn("Reset to default", false) {
+                ToolCatalog.save(prefs, ToolCatalog.defaults)
+                refreshToolPicker()
+            }
+        )
+    }
+
+    private fun refreshToolPicker() {
+        val chosen = ToolCatalog.load(prefs)
+        toolPicker.removeAllViews()
+        ToolCatalog.groups.forEach { (name, items) ->
+            toolPicker.addView(tv(name, 12f, SUB, true).apply { setPadding(dp(4), dp(10), 0, dp(2)) })
+            items.chunked(3).forEach { part ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = lp(top = 6)
+                }
+                part.forEach { it0 ->
+                    val pos = chosen.indexOf(it0.id)
+                    val on = pos >= 0
+                    row.addView(TextView(this).apply {
+                        text = (if (on) "${pos + 1}  " else "") + it0.glyph + "\n" + it0.label
+                        gravity = Gravity.CENTER
+                        maxLines = 2
+                        setTextColor(Color.WHITE)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                        if (on) typeface = Typeface.DEFAULT_BOLD
+                        setPadding(dp(4), dp(10), dp(4), dp(10))
+                        background = if (on) buttonBg(true, 12) else bg(FIELD, 12)
+                        layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f).apply { setMargins(dp(3), 0, dp(3), 0) }
+                        setOnClickListener {
+                            val now = ToolCatalog.load(prefs)
+                            if (now.contains(it0.id)) {
+                                if (now.size <= 1) {
+                                    Toast.makeText(this@MainActivity, "Keep at least one tool on the bar", Toast.LENGTH_SHORT).show()
+                                    return@setOnClickListener
+                                }
+                                now.remove(it0.id)
+                            } else if (now.size >= 30) {
+                                Toast.makeText(this@MainActivity, "Maximum 30 tools", Toast.LENGTH_SHORT).show()
+                                return@setOnClickListener
+                            } else now.add(it0.id)
+                            ToolCatalog.save(prefs, now)
+                            refreshToolPicker()
+                        }
+                    })
+                }
+                repeat(3 - part.size) {
+                    row.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+                }
+                toolPicker.addView(row)
+            }
+        }
     }
 
     // ------------------------------------------------------------------ LOOK

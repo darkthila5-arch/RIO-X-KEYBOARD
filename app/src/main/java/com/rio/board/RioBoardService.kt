@@ -476,6 +476,7 @@ class RioBoardService : InputMethodService() {
             boomStatusText = "Stopped"
         }
         toolsPinned = false
+        loadPinned()               // picks up tools chosen in the app
         sbuf.clear()
         undoCorr = null
         swipeCommitted = null
@@ -822,8 +823,8 @@ class RioBoardService : InputMethodService() {
     private fun loadPinned() {
         val raw = prefs.getString("pinned", null)?.split(",")
             ?.filter { toolById(it) != null }?.distinct()?.toMutableList() ?: mutableListOf()
-        for (d in defaultPinned) if (raw.size < 6 && !raw.contains(d)) raw.add(d)
-        pinned = ArrayList(raw.take(6))
+        if (raw.isEmpty()) raw.addAll(defaultPinned.filter { toolById(it) != null })
+        pinned = ArrayList(raw.take(30))      // chosen in the app (Typing -> Keyboard toolbar) or dragged here
     }
 
     private fun savePinned() {
@@ -894,7 +895,7 @@ class RioBoardService : InputMethodService() {
         }
         val circle = 38
         if (!editing) return swipeToolbar(bar, circle)
-        pinned.forEachIndexed { i, id ->
+        pinned.take(6).forEachIndexed { i, id ->
             val t = toolById(id) ?: return@forEachIndexed
             val slot = FrameLayout(this).apply {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
@@ -983,7 +984,7 @@ class RioBoardService : InputMethodService() {
         val slotW = (total - dp(8)) / 7
         val ordered = ArrayList<Tool>()
         pinned.forEach { id -> toolById(id)?.let { ordered.add(it) } }
-        toolList.forEach { t -> if (ordered.none { it.id == t.id }) ordered.add(t) }
+        if (prefs.getBoolean("bar_all", true)) toolList.forEach { t -> if (ordered.none { it.id == t.id }) ordered.add(t) }
 
         val strip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
