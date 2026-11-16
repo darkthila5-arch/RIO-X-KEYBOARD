@@ -27,6 +27,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -69,6 +70,9 @@ class MainActivity : Activity() {
     private val PINK = Color.parseColor("#FF4D8D")
     private val PURPLE = Color.parseColor("#B84DFF")
     private val GREEN = Color.parseColor("#2E9E63")
+    private val PILL = Color.parseColor("#22242D")
+    private val EDGE = Color.parseColor("#1FFFFFFF")
+    private var heroCta: TextView? = null
 
     private fun dp(v: Int) = (v * density).toInt()
 
@@ -89,31 +93,37 @@ class MainActivity : Activity() {
 
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(NAV)
-            setPadding(0, dp(6), 0, dp(6))
+            background = bg(PILL, 30, EDGE)
+            setPadding(dp(6), dp(6), dp(6), dp(6))
         }
         listOf("\uD83C\uDFE0" to "Home", "\u2328\uFE0F" to "Typing", "\uD83C\uDFA8" to "Look", "\u2699\uFE0F" to "More")
             .forEachIndexed { i, pair ->
                 val label = SpannableString(pair.first + "\n" + pair.second)
-                label.setSpan(RelativeSizeSpan(1.7f), 0, pair.first.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                label.setSpan(RelativeSizeSpan(1.5f), 0, pair.first.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 val t = TextView(this).apply {
                     text = label
                     gravity = Gravity.CENTER
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                    setPadding(0, dp(6), 0, dp(6))
-                    layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+                    typeface = Typeface.DEFAULT_BOLD
+                    setPadding(0, dp(7), 0, dp(7))
+                    layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f).apply { setMargins(dp(2), 0, dp(2), 0) }
                     setOnClickListener { selectTab(i) }
                 }
                 tabs.add(t)
                 bar.addView(t)
             }
+        val barWrap = FrameLayout(this).apply {
+            setBackgroundColor(NAV)
+            setPadding(dp(14), dp(8), dp(14), dp(10))
+            addView(bar, FrameLayout.LayoutParams(MATCH, WRAP))
+        }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(BG)
         }
         root.addView(frame, LinearLayout.LayoutParams(MATCH, 0, 1f))
-        root.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
+        root.addView(barWrap, LinearLayout.LayoutParams(MATCH, WRAP))
         setContentView(root)
 
         selectTab(0)
@@ -129,7 +139,12 @@ class MainActivity : Activity() {
 
     private fun selectTab(i: Int) {
         pages.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
-        tabs.forEachIndexed { k, t -> t.setTextColor(if (k == i) PINK else SUB) }
+        tabs.forEachIndexed { k, t ->
+            val on = k == i
+            t.setTextColor(if (on) Color.WHITE else SUB)
+            t.background = if (on) GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(PINK, PURPLE))
+                .apply { cornerRadius = dp(22).toFloat() } else null
+        }
         pages[i].alpha = 0f
         pages[i].animate().alpha(1f).setDuration(220).start()
     }
@@ -149,32 +164,111 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------------ HOME
 
     private fun homePage(): View {
-        val head = LinearLayout(this).apply {
+        // top row: two round buttons
+        val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            layoutParams = lp(bottom = 18)
+            layoutParams = lp(bottom = 16)
         }
-        head.addView(ImageView(this).apply {
+        top.addView(roundBtn("\u2728") { selectTab(2) })
+        top.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        top.addView(roundBtn("\u2699\uFE0F") { selectTab(3) })
+
+        // hero card with twinkling stars
+        val hero = FrameLayout(this).apply {
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(Color.parseColor("#2B1B6B"), Color.parseColor("#7B2FBE"), Color.parseColor("#E0407F"))
+            ).apply { cornerRadius = dp(28).toFloat() }
+            clipToOutline = true
+            layoutParams = lp(bottom = 22)
+            addView(StarsView(this@MainActivity), FrameLayout.LayoutParams(MATCH, MATCH))
+        }
+        val inner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(ImageView(this).apply {
             setImageResource(R.mipmap.ic_launcher_round)
-            layoutParams = LinearLayout.LayoutParams(dp(64), dp(64))
+            layoutParams = LinearLayout.LayoutParams(dp(68), dp(68))
         })
         val names = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, 0, 0)
         }
-        names.addView(tv("RIO BOARD", 26f, Color.WHITE, true))
-        names.addView(tv("සිංහල + English Keyboard", 14f, SUB))
-        head.addView(names)
+        names.addView(tv("RIO BOARD", 28f, Color.WHITE, true))
+        names.addView(tv("\u0DC3\u0DD2\u0D82\u0DC4\u0DBD \u2022 Singlish \u2022 English", 13f, Color.parseColor("#E6DCFF")))
+        row.addView(names)
+        inner.addView(row)
+
+        val cta = TextView(this).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.parseColor("#2B1B6B"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            typeface = Typeface.DEFAULT_BOLD
+            background = ripple(bg(Color.WHITE, 26))
+            setPadding(0, dp(15), 0, dp(15))
+            layoutParams = lp(top = 18)
+        }
+        heroCta = cta
+        inner.addView(cta)
+
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        chips.addView(chip("A\u2192\u0D85  Singlish") { selectTab(1) })
+        chips.addView(chip("\u26A1 Shortcuts") { selectTab(1) })
+        chips.addView(chip("\uD83C\uDFA8 Look") { selectTab(2) })
+        chips.addView(chip("\uD83D\uDCAC Statuses") { launch(Intent(this, StatusActivity::class.java)) })
+        inner.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutParams = lp(top = 14)
+            addView(chips)
+        })
+        hero.addView(inner, FrameLayout.LayoutParams(MATCH, WRAP))
 
         updateBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         setupBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = bg(CARD, 18)
+            background = bg(CARD, 22, EDGE)
             setPadding(dp(16), dp(16), dp(16), dp(16))
-            layoutParams = lp(bottom = 12)
+            layoutParams = lp(bottom = 14)
         }
         refreshSetup()
         refreshUpdate()
+
+        // live backgrounds strip
+        val live = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = lp(bottom = 18)
+            addView(AnimatedBackgrounds.strip(this@MainActivity, {}, {}))
+        }
+
+        // quick tools
+        val t1 = tile("\uD83C\uDFA8", "Look studio", "Backgrounds & effects", "#FF9A3D", "#FF4D8D") { selectTab(2) }
+        val t2 = tile("\u2328\uFE0F", "Typing guide", "Singlish & shortcuts", "#6C4DFF", "#B84DFF") { selectTab(1) }
+        val t3 = tile("\uD83D\uDCAC", "Status Saver", "Save WhatsApp statuses", "#0FA67F", "#27D3A2") {
+            launch(Intent(this, StatusActivity::class.java))
+        }
+        val t4 = tile("\uD83C\uDFAD", "Stickers & GIFs", "Make your own", "#2F6BFF", "#27B7FF") {
+            launch(Intent(this, MakerActivity::class.java))
+        }
+        val t5 = tile("\uD83C\uDFA4", "Voice changer", "Fun voice effects", "#E0407F", "#9B3DFF") {
+            launch(Intent(this, VoiceChangerActivity::class.java))
+        }
+        val t6 = tile("\uD83D\uDCF7", "QR reader", "Scan or open a picture", "#FFB020", "#FF7A18") {
+            launch(Intent(this, QrReadActivity::class.java))
+        }
+        val t7 = tile("\u22EF", "Read more", "Hide the long part", "#4B5BFF", "#8A3FD1") {
+            launch(Intent(this, ReadMoreActivity::class.java))
+        }
+        val t8 = tile("\uD83D\uDD12", "Secret message", "Lock & unlock text", "#1F9D6B", "#0E6E8C") {
+            launch(Intent(this, CryptoActivity::class.java).putExtra("mode", "enc").putExtra("text", "").putExtra("whole", false))
+        }
+        val t9 = tile("\u2699\uFE0F", "Settings & info", "Updates, fonts, about", "#3A3F55", "#5A4B8A") { selectTab(3) }
+        t9.layoutParams = lp(bottom = 14)
 
         val test = card(
             title("\u270D\uFE0F  Try it here"),
@@ -184,11 +278,110 @@ class MainActivity : Activity() {
         val tip = card(
             title("\uD83D\uDCA1  Tip"),
             note(
-                "Turn on Singlish with the  A→අ  button in the keyboard toolbar, then type  mama  and you get  මම.\n" +
+                "Turn on Singlish with the  A\u2192\u0D85  button in the keyboard toolbar, then type  mama  and you get  \u0DB8\u0DB8.\n" +
                     "More help is in the Typing tab."
             )
         )
-        return pageOf(head, updateBox, setupBox, test, tip)
+        return pageOf(
+            top, hero, updateBox, setupBox,
+            section("Live backgrounds", "See all") { selectTab(2) }, live,
+            section("Quick tools"),
+            tileRow(t1, t2), tileRow(t3, t4), tileRow(t5, t6), tileRow(t7, t8), t9,
+            test, tip
+        )
+    }
+
+    private fun launch(i: Intent) {
+        try {
+            startActivity(i)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Could not open this tool", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun roundBtn(glyph: String, onClick: () -> Unit): View = TextView(this).apply {
+        text = glyph
+        gravity = Gravity.CENTER
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+        setTextColor(Color.WHITE)
+        background = ripple(GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(PILL)
+            setStroke(dp(1), EDGE)
+        })
+        layoutParams = LinearLayout.LayoutParams(dp(46), dp(46))
+        setOnClickListener { onClick() }
+    }
+
+    private fun chip(t: String, onClick: () -> Unit): View = TextView(this).apply {
+        text = t
+        setTextColor(Color.WHITE)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        typeface = Typeface.DEFAULT_BOLD
+        background = ripple(bg(Color.parseColor("#33FFFFFF"), 18))
+        setPadding(dp(14), dp(8), dp(14), dp(8))
+        layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = dp(8) }
+        setOnClickListener { onClick() }
+    }
+
+    private fun section(t: String, action: String = "", onAction: () -> Unit = {}): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        layoutParams = lp(top = 4, bottom = 10)
+        addView(tv(t, 20f, Color.WHITE, true).apply { layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f) })
+        if (action.isNotEmpty()) {
+            addView(tv("$action \u203A", 14f, PURPLE, true).apply { setOnClickListener { onAction() } })
+        }
+    }
+
+    private fun tile(glyph: String, t: String, sub: String, c1: String, c2: String, onClick: () -> Unit): LinearLayout {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = ripple(
+                GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(Color.parseColor(c1), Color.parseColor(c2)))
+                    .apply { cornerRadius = dp(24).toFloat() }
+            )
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            setOnClickListener { onClick() }
+        }
+        box.addView(TextView(this).apply {
+            text = glyph
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+            setTextColor(Color.WHITE)
+            background = bg(Color.parseColor("#33FFFFFF"), 16)
+            layoutParams = LinearLayout.LayoutParams(dp(48), dp(48)).apply { bottomMargin = dp(16) }
+        })
+        box.addView(tv(t, 17f, Color.WHITE, true))
+        box.addView(tv(sub, 12.5f, Color.parseColor("#F2EBFF")))
+        return box
+    }
+
+    private fun tileRow(a: View, b: View): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        layoutParams = lp(bottom = 12)
+        addView(a, LinearLayout.LayoutParams(0, MATCH, 1f).apply { rightMargin = dp(6) })
+        addView(b, LinearLayout.LayoutParams(0, MATCH, 1f).apply { leftMargin = dp(6) })
+    }
+
+    private fun refreshHero() {
+        val c = heroCta ?: return
+        when {
+            !isEnabled() -> {
+                c.text = "Enable RIO BOARD  \u2192"
+                c.setOnClickListener { startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)) }
+            }
+            !isSelected() -> {
+                c.text = "Select RIO BOARD  \u2192"
+                c.setOnClickListener {
+                    (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
+                }
+            }
+            else -> {
+                c.text = "Customise my keyboard  \u2728"
+                c.setOnClickListener { selectTab(2) }
+            }
+        }
     }
 
     private fun isEnabled(): Boolean = try {
@@ -209,11 +402,12 @@ class MainActivity : Activity() {
         setupBox.removeAllViews()
         val en = isEnabled()
         val sel = isSelected()
+        refreshHero()
         if (en && sel) {
-            setupBox.addView(title("\u2705  RIO BOARD is ready"))
-            setupBox.addView(note("It is your active keyboard. Open any app and start typing."))
+            setupBox.visibility = View.GONE
             return
         }
+        setupBox.visibility = View.VISIBLE
         setupBox.addView(title("\uD83D\uDE80  Get started"))
         setupBox.addView(note("Two quick steps and you are done."))
         setupBox.addView(stepRow(1, "Enable RIO BOARD", "Switch it on in the keyboard list.", en, "Enable") {
@@ -1045,15 +1239,20 @@ class MainActivity : Activity() {
     private fun pageHeader(t: String, sub: String): View = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         layoutParams = lp(bottom = 16)
-        addView(tv(t, 28f, Color.WHITE, true))
+        addView(tv(t, 30f, Color.WHITE, true))
         addView(tv(sub, 14f, SUB))
+        addView(View(this@MainActivity).apply {
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(PINK, PURPLE))
+                .apply { cornerRadius = dp(3).toFloat() }
+            layoutParams = LinearLayout.LayoutParams(dp(44), dp(4)).apply { topMargin = dp(10) }
+        })
     }
 
     private fun card(vararg views: View): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        background = bg(CARD, 18)
-        setPadding(dp(16), dp(16), dp(16), dp(16))
-        layoutParams = lp(bottom = 12)
+        background = bg(CARD, 22, EDGE)
+        setPadding(dp(18), dp(18), dp(18), dp(18))
+        layoutParams = lp(bottom = 14)
         views.forEach { addView(it) }
     }
 
@@ -1114,5 +1313,25 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
             gravity = Gravity.END
         })
+    }
+}
+
+/** Soft twinkling dots behind the hero card on the Home tab. */
+private class StarsView(ctx: android.content.Context) : View(ctx) {
+    private val rnd = java.util.Random(7)
+    private val xs = FloatArray(28) { rnd.nextFloat() }
+    private val ys = FloatArray(28) { rnd.nextFloat() }
+    private val rs = FloatArray(28) { 0.6f + rnd.nextFloat() * 1.8f }
+    private val ph = FloatArray(28) { rnd.nextFloat() * 6.28f }
+    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+
+    override fun onDraw(c: android.graphics.Canvas) {
+        val t = System.currentTimeMillis() / 700.0
+        val d = resources.displayMetrics.density
+        for (i in xs.indices) {
+            paint.alpha = (90 + 150 * (0.5 + 0.5 * Math.sin(t + ph[i]))).toInt()
+            c.drawCircle(xs[i] * width, ys[i] * height, rs[i] * d, paint)
+        }
+        postInvalidateOnAnimation()
     }
 }
