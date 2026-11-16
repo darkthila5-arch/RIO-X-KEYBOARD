@@ -1119,6 +1119,14 @@ class RioBoardService : InputMethodService() {
             up = if (strong) 0xFFFF5C9A.toInt() else if (soft) 0xFFFFA9CC.toInt() else 0xFFFFC9DF.toInt()
             down = if (strong) 0xFFFF3D85.toInt() else if (soft) 0xFFFF8FBC.toInt() else 0xFFFFAECB.toInt()
         }
+        if (keyTpl == KeyStyles.PLUSH) {
+            // plush fur: white and pink keys, deeper pink for special keys, rose for enter
+            val strong = color == th.accent || color == th.active
+            val soft = color == th.special
+            val white = (seed and 1) == 0
+            up = if (strong) 0xFFFF86B3.toInt() else if (soft) 0xFFFFA8CB.toInt() else if (white) 0xFFFFF4F8.toInt() else 0xFFFFB3D2.toInt()
+            down = if (strong) 0xFFEE6D9F.toInt() else if (soft) 0xFFF28DB6.toInt() else if (white) 0xFFF6D9E5.toInt() else 0xFFF29BBE.toInt()
+        }
         return StateListDrawable().apply {
             addState(
                 intArrayOf(android.R.attr.state_pressed),
@@ -2561,6 +2569,16 @@ class RioBoardService : InputMethodService() {
         if (k.space) {
             tv.letterSpacing = 0.2f
             tv.typeface = Typeface.DEFAULT_BOLD
+        }
+        if (keyTpl == KeyStyles.PLUSH) {
+            // Plush keys: motif in the middle, small soft pink letter at the bottom
+            if (!k.space) {
+                tv.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                tv.setPadding(0, 0, 0, dp(7))
+                tv.setTextSize(TypedValue.COMPLEX_UNIT_SP, k.textSp * 0.8f)
+            }
+            tv.typeface = Typeface.DEFAULT_BOLD
+            if (k.style != Style.ACCENT && k.style != Style.ACTIVE) tv.setTextColor(0xFFC2457F.toInt())
         }
         if (keyTpl == KeyStyles.KAWAII) {
             // Kawaii keys: the big motif sits top right, the letter bottom left in deep rose
