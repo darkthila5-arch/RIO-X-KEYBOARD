@@ -1019,9 +1019,12 @@ class RioBoardService : InputMethodService() {
                 render()
             }
         }
-        val iv = IconView(this, IconView.Kind.COLLAPSE)
-        iv.tint = th.text
-        val sz = dp((circle * 0.66f).toInt())
+        // the app icon opens the all-tools grid (it turns into a close button while the grid is open)
+        val iv = android.widget.ImageView(this).apply {
+            setImageResource(R.mipmap.ic_launcher_round)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        }
+        val sz = dp(32)
         toggle.addView(iv, FrameLayout.LayoutParams(sz, sz, Gravity.CENTER))
         bar.addView(toggle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         return bar
