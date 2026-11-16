@@ -74,6 +74,14 @@
             android:taskAffinity=""
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- WhatsApp "Read more" message maker, opened from the keyboard -->
+        <activity
+            android:name=".ReadMoreActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:windowSoftInputMode="adjustResize" />
+
         <!-- QR reader: camera scan (Google code scanner) or from a picture -->
         <activity
             android:name=".QrReadActivity"

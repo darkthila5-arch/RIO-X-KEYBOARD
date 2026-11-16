@@ -263,6 +263,7 @@ class RioBoardService : InputMethodService() {
     private var pendingInsert: String? = null
     private var pendingInsertAt = 0L
     private var pendingReplaceAll = false
+    private var pendingSend = false
     private var pendingVoiceAt = 0L
 
     private val keyHs = intArrayOf(44, 50, 56)
@@ -3765,29 +3766,30 @@ class RioBoardService : InputMethodService() {
         flushSinglish()
         val f = readField(ic)
         val all = f.all
-        if (all.isBlank()) {
-            toast("Type your message first")
+        val zw = '\u200B'
+        if (all.count { it == zw } >= 200) {
+            // already a read-more message: turn it back into normal text
+            replaceWholeField(ic, f, all.replace(zw.toString(), ""))
+            toast("Read more removed")
+            suggestions = computeSuggestions()
+            render()
             return
         }
-        val zw = '\u200B'
-        val out: String
-        if (all.count { it == zw } >= 200) {
-            out = all.replace(zw.toString(), "")       // already a read-more message: turn it back
-            toast("Read more removed")
-        } else {
-            val nl = all.indexOf('\n')
-            if (nl < 0 || all.substring(nl).isBlank()) {
-                toast("Line 1 = the part people see. Press Enter, type the hidden part, then tap this again")
-                return
-            }
-            val head = all.substring(0, nl).trimEnd()
-            val rest = all.substring(nl + 1).trimStart('\n')
-            out = head + zw.toString().repeat(READ_MORE_PAD) + "\n" + rest
-            toast("Read more ready - press send")
+        // otherwise open the Read more maker: 1) part people see  2) hidden part  3) put in chat / send
+        val nl = all.indexOf('\n')
+        val visible = if (nl < 0) all.trim() else all.substring(0, nl).trim()
+        val hidden = if (nl < 0) "" else all.substring(nl + 1).trim('\n', ' ')
+        try {
+            startActivity(
+                Intent(this, ReadMoreActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra("visible", visible)
+                    .putExtra("hidden", hidden)
+                    .putExtra("whole", all.isNotBlank())
+            )
+        } catch (e: Exception) {
+            toast("Could not open the Read more maker")
         }
-        replaceWholeField(ic, f, out)
-        suggestions = computeSuggestions()
-        render()
     }
 
     /** Selected text (or the word before the cursor): UPPER -> lower -> Title -> UPPER ... */
@@ -4719,6 +4721,15 @@ class RioBoardService : InputMethodService() {
     fun cryptoInsert(text: String, replaceAll: Boolean) {
         pendingInsert = text
         pendingReplaceAll = replaceAll
+        pendingSend = false
+        pendingInsertAt = SystemClock.uptimeMillis()
+    }
+
+    /** Called by ReadMoreActivity: the finished message goes into the chat box (and is sent when [send] is true). */
+    fun readMoreInsert(text: String, replaceAll: Boolean, send: Boolean) {
+        pendingInsert = text
+        pendingReplaceAll = replaceAll
+        pendingSend = send
         pendingInsertAt = SystemClock.uptimeMillis()
     }
 
@@ -4726,18 +4737,23 @@ class RioBoardService : InputMethodService() {
         val t = pendingInsert ?: return
         if (SystemClock.uptimeMillis() - pendingInsertAt > 30000) {
             pendingInsert = null
+            pendingSend = false
             return
         }
         val ic = currentInputConnection ?: return
         pendingInsert = null
         ic.beginBatchEdit()
         if (pendingReplaceAll) {
-            val before = ic.getTextBeforeCursor(100000, 0)?.length ?: 0
-            val after = ic.getTextAfterCursor(100000, 0)?.length ?: 0
-            ic.deleteSurroundingText(before, after)
+            val f = readField(ic)
+            if (f.sel.isNotEmpty()) ic.commitText("", 1)
+            ic.deleteSurroundingText(f.before.length, f.after.length)
         }
         ic.commitText(t, 1)
         ic.endBatchEdit()
+        if (pendingSend) {
+            pendingSend = false
+            handler.postDelayed({ pressEnter() }, 350)
+        }
     }
 
     private fun clipText(): String = try {
