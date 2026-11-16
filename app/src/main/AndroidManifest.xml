@@ -74,6 +74,19 @@
             android:taskAffinity=""
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- QR reader: camera scan (Google code scanner) or from a picture -->
+        <activity
+            android:name=".QrReadActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault.Dialog" />
+
+        <!-- asks Google Play services to download the camera scanner in the background after install -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
+
         <!-- WhatsApp status gallery: full size preview with Save / Share / Delete -->
         <activity
             android:name=".StatusActivity"

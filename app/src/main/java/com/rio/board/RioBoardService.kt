@@ -783,6 +783,8 @@ class RioBoardService : InputMethodService() {
             tx("gsearch", "Google search", 1, "G", 18f) { googleSearch() },
             tx("gtrans", "Google Translate", 1, "\u6587A", 14f) { googleTranslate() },
             tx("gvoice", "Google voice search", 1, "G\uD83C\uDFA4", 12f) { googleVoice() },
+            tx("qrmake", "QR code maker", 1, "QR", 15f) { qrMake() },
+            tx("qrread", "QR reader", 1, "QR\uD83D\uDCF7", 11f) { qrRead() },
             tx("mock", "sPoNgE text", 1, "aBc", 13f) { mockText() },
             tx("flip", "Upside down", 1, "\u0250q", 14f) { flipText() },
             tx("spaced", "S P A C E D", 1, "A B", 13f) { spacedText() },
@@ -3840,12 +3842,12 @@ class RioBoardService : InputMethodService() {
 
     // ---------- Google tools ----------
     /** Selected text, else the whole text in the box (max 500 chars). */
-    private fun googleQuery(): String {
+    private fun googleQuery(max: Int = 500): String {
         val ic = currentInputConnection ?: return ""
         flushSinglish()
         val f = readField(ic)
         val s = if (f.sel.isNotEmpty()) f.sel else f.all
-        return s.replace('\u200B', ' ').trim().take(500)
+        return s.replace('\u200B', ' ').trim().take(max)
     }
 
     private fun launch(i: Intent): Boolean {
@@ -3890,6 +3892,40 @@ class RioBoardService : InputMethodService() {
         val i = Intent(android.speech.RecognizerIntent.ACTION_WEB_SEARCH)
         if (!launch(i)) {
             if (!launch(Intent(Intent.ACTION_VOICE_COMMAND))) toast("Google voice search is not available on this phone")
+        }
+    }
+
+    // ---------- QR tools ----------
+    /** Makes a QR code of the selected text (or the whole text box) with the app icon in the middle and sends it as an image. */
+    private fun qrMake() {
+        val q = googleQuery(1200)
+        if (q.isEmpty()) {
+            toast("Type or select the text for the QR code first")
+            return
+        }
+        val bmp = try { QrKit.make(this, q) } catch (e: Exception) { null }
+        if (bmp == null) {
+            toast("That text is too long for a QR code")
+            return
+        }
+        try {
+            val dir = StickerStore.dir(this)
+            dir.listFiles { f -> f.isFile && f.name.startsWith("pk_qr_") }
+                ?.sortedByDescending { it.lastModified() }?.drop(5)?.forEach { it.delete() }
+            val f = java.io.File(dir, "pk_qr_" + System.currentTimeMillis() + ".png")
+            java.io.FileOutputStream(f).use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            bmp.recycle()
+            sendSticker(f)
+        } catch (e: Exception) {
+            toast("Could not make the QR code")
+        }
+    }
+
+    private fun qrRead() {
+        flushSinglish()
+        try {
+            startActivity(Intent(this, QrReadActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
         }
     }
 

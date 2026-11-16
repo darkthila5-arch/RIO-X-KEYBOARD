@@ -49,3 +49,8 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies {
+    implementation("com.google.zxing:core:3.5.3")                                   // makes / reads QR codes
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")      // camera QR scanner (no camera permission needed)
+}
