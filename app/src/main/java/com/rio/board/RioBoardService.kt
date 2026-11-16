@@ -770,6 +770,7 @@ class RioBoardService : InputMethodService() {
             tx("fonts", "Fonts", 1, "Aa", 16f, { fontStyle != 0 || rioStyle >= 0 || panel == Panel.FONTS }) { togglePanel(Panel.FONTS) },
             ic("snips", "Shortcuts", 1, IconView.Kind.BOLT, { panel == Panel.SNIPS }) { togglePanel(Panel.SNIPS) },
             tx("case", "Change case", 1, "a⇄A", 13f) { changeCase() },
+            tx("readmore", "Read more message", 1, "\u22EF", 20f) { makeReadMore() },
             ic("date", "Date & time", 1, IconView.Kind.CALENDAR) { insertDateTime() },
             ic("calc", "Calculator", 1, IconView.Kind.CALC, { panel == Panel.CALC }) { openCalc() },
             ic("lock", "Secret message", 1, IconView.Kind.LOCK, { panel == Panel.CRYPTO }) { togglePanel(Panel.CRYPTO) },
@@ -3401,6 +3402,8 @@ class RioBoardService : InputMethodService() {
         if (!s.isNullOrEmpty()) type(s)
     }
 
+    private val READ_MORE_PAD = 4000     // invisible characters (U+200B) between the preview and the hidden text
+
     private fun toast(msg: String) {
         android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
     }
@@ -3428,6 +3431,44 @@ class RioBoardService : InputMethodService() {
     }
 
     /** Selected text (or the word before the cursor): UPPER -> lower -> Title -> UPPER ... */
+    /**
+     * WhatsApp "Read more" message. Line 1 stays visible; everything after it is pushed behind a
+     * "Read more" link by a long run of invisible characters. Tap the tool again to undo.
+     */
+    private fun makeReadMore() {
+        val ic = currentInputConnection ?: return
+        flushSinglish()
+        val before = ic.getTextBeforeCursor(100000, 0)?.toString() ?: ""
+        val after = ic.getTextAfterCursor(100000, 0)?.toString() ?: ""
+        val all = before + after
+        if (all.isBlank()) {
+            toast("Type your message first")
+            return
+        }
+        val zw = '\u200B'
+        val out: String
+        if (all.count { it == zw } >= 200) {
+            out = all.replace(zw.toString(), "")       // already a read-more message: turn it back
+            toast("Read more removed")
+        } else {
+            val nl = all.indexOf('\n')
+            if (nl < 0 || all.substring(nl).isBlank()) {
+                toast("Line 1 = the part people see. Press Enter, type the hidden part, then tap this again")
+                return
+            }
+            val head = all.substring(0, nl).trimEnd()
+            val rest = all.substring(nl + 1).trimStart('\n')
+            out = head + zw.toString().repeat(READ_MORE_PAD) + "\n" + rest
+            toast("Read more ready - press send")
+        }
+        ic.beginBatchEdit()
+        ic.deleteSurroundingText(before.length, after.length)
+        ic.commitText(out, 1)
+        ic.endBatchEdit()
+        suggestions = computeSuggestions()
+        render()
+    }
+
     private fun changeCase() {
         val ic = currentInputConnection ?: return
         flushSinglish()
