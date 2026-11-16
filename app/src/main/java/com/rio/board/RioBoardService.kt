@@ -1110,12 +1110,21 @@ class RioBoardService : InputMethodService() {
         if (keyTpl == 0 && keyDecor == 0) return roundBg(color, 8)
         val dens = resources.displayMetrics.density
         val seed = label.hashCode()
+        var up = kc(color)
+        var down = kc(th.pressed)
+        if (keyTpl == KeyStyles.KAWAII) {
+            // the Kawaii template brings its own pink colours (works with any theme)
+            val strong = color == th.accent || color == th.active
+            val soft = color == th.special
+            up = if (strong) 0xFFFF5C9A.toInt() else if (soft) 0xFFFFA9CC.toInt() else 0xFFFFC9DF.toInt()
+            down = if (strong) 0xFFFF3D85.toInt() else if (soft) 0xFFFF8FBC.toInt() else 0xFFFFAECB.toInt()
+        }
         return StateListDrawable().apply {
             addState(
                 intArrayOf(android.R.attr.state_pressed),
-                KeyDrawable(dens, keyTpl, kc(th.pressed), th.accent, true, keyDecor, seed)
+                KeyDrawable(dens, keyTpl, down, th.accent, true, keyDecor, seed)
             )
-            addState(intArrayOf(), KeyDrawable(dens, keyTpl, kc(color), th.accent, false, keyDecor, seed))
+            addState(intArrayOf(), KeyDrawable(dens, keyTpl, up, th.accent, false, keyDecor, seed))
         }
     }
 
@@ -2552,6 +2561,15 @@ class RioBoardService : InputMethodService() {
         if (k.space) {
             tv.letterSpacing = 0.2f
             tv.typeface = Typeface.DEFAULT_BOLD
+        }
+        if (keyTpl == KeyStyles.KAWAII) {
+            // Kawaii keys: the big motif sits top right, the letter bottom left in deep rose
+            if (!k.space) {
+                tv.gravity = Gravity.BOTTOM or Gravity.START
+                tv.setPadding(dp(6), 0, 0, dp(5))
+            }
+            tv.typeface = Typeface.DEFAULT_BOLD
+            if (k.style != Style.ACCENT && k.style != Style.ACTIVE) tv.setTextColor(0xFF8A2552.toInt())
         }
         tv.background = keyBg(
             when (k.style) {

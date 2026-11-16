@@ -18,7 +18,8 @@ import kotlin.math.max
 import kotlin.math.sin
 
 object KeyStyles {
-    val templates = listOf("Classic", "Frost", "Fluffy", "Sci-Fi", "Glass", "Bubble", "Neon")
+    val templates = listOf("Classic", "Frost", "Fluffy", "Sci-Fi", "Glass", "Bubble", "Neon", "Kawaii 🍓")
+    const val KAWAII = 7
     val decors = listOf("None", "Snow ❄", "Hearts ♥", "Flowers ✿", "Stars ✦", "Bows 🎀", "Paws 🐾", "Mix ✨")
 
     // ornament kinds
@@ -126,6 +127,10 @@ class KeyDrawable(
         when (tpl) {
             2 -> buildFur(b)
             4 -> shader = LinearGradient(0f, 0f, 0f, h * 0.55f, 0x5FFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP)
+            7 -> {
+                shader = LinearGradient(0f, 0f, 0f, h, intArrayOf(lighten(fill, 0.30f), fill, darken(fill, 0.08f)), floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+                shader2 = LinearGradient(0f, 0f, 0f, h * 0.40f, 0x99FFFFFF.toInt(), 0x10FFFFFF, Shader.TileMode.CLAMP)
+            }
             5 -> {
                 val top = lighten(fill, 0.28f)
                 val bot = darken(fill, 0.24f)
@@ -186,6 +191,7 @@ class KeyDrawable(
             4 -> drawGlass(c)
             5 -> drawBubble(c)
             6 -> drawNeon(c)
+            7 -> drawKawaii(c)
             else -> drawClassic(c)
         }
         if (decor != 0) drawOrnaments(c)
@@ -329,6 +335,169 @@ class KeyDrawable(
         p.color = lighten(accent, 0.35f)
         p.strokeWidth = 1.5f * d
         c.drawRoundRect(r, 10f * d, 10f * d, p)
+    }
+
+    // ------------------------------------------------------------------ kawaii: glossy pink key with a big sweet motif
+    private fun drawKawaii(c: Canvas) {
+        val sink = if (pressed) 1.4f * d else 0f
+        val lift = 2f * d
+        if (!pressed) {
+            r.set(1.2f * d, 1.2f * d + lift, w - 1.2f * d, h - 0.4f * d)
+            p.style = Paint.Style.FILL
+            p.color = 0x40B0306A
+            c.drawRoundRect(r, 11f * d, 11f * d, p)
+        }
+        c.save()
+        c.translate(0f, sink)
+        r.set(1.2f * d, 1.2f * d, w - 1.2f * d, h - 1.2f * d - lift)
+        p.style = Paint.Style.FILL
+        p.shader = shader
+        c.drawRoundRect(r, 11f * d, 11f * d, p)
+        p.shader = null
+        p.style = Paint.Style.STROKE
+        p.strokeWidth = 1.6f * d
+        p.color = 0xE6FFFFFF.toInt()
+        c.drawRoundRect(r, 11f * d, 11f * d, p)
+        // soft gloss on the upper half
+        r.set(5f * d, 3f * d, w - 5f * d, h * 0.38f)
+        p.style = Paint.Style.FILL
+        p.shader = shader2
+        c.drawRoundRect(r, 8f * d, 8f * d, p)
+        p.shader = null
+
+        val s0 = if (seed < 0) -seed else seed
+        val bodyH = h - lift
+        if (w > 2.2f * bodyH) {
+            // long key (space bar): little motifs on both ends, the text stays in the middle
+            val sz = bodyH * 0.27f
+            motif(c, 2, 14f * d + sz, bodyH * 0.5f, sz)
+            motif(c, 3, w - 14f * d - sz, bodyH * 0.5f, sz)
+        } else {
+            val sz = minOf(bodyH * 0.33f, w * 0.34f)
+            val pad = 3.6f * d
+            motif(c, s0 % 5, w - pad - sz, pad + sz, sz)
+            // tiny sparkle top left
+            val sp = sz * 0.26f
+            c.save()
+            c.translate(pad + sp + 1f * d, pad + sp + 1f * d)
+            c.scale(sp, sp)
+            p.reset()
+            p.isAntiAlias = true
+            p.color = 0xFFFFFFFF.toInt()
+            c.drawPath(KeyStyles.sparkle, p)
+            c.restore()
+        }
+        c.restore()
+    }
+
+    /** 0 strawberry, 1 ribbon bow, 2 heart, 3 daisy, 4 cupcake. Own drawings, unit size about -1..1. */
+    private fun motif(c: Canvas, kind: Int, cx: Float, cy: Float, s: Float) {
+        c.save()
+        c.translate(cx, cy)
+        c.scale(s, s)
+        p.reset()
+        p.isAntiAlias = true
+        p.style = Paint.Style.FILL
+        when (kind) {
+            0 -> {
+                // strawberry
+                path.reset()
+                path.moveTo(0f, 1f)
+                path.cubicTo(-0.2f, 0.95f, -0.95f, 0.35f, -0.9f, -0.2f)
+                path.cubicTo(-0.85f, -0.65f, -0.35f, -0.75f, 0f, -0.62f)
+                path.cubicTo(0.35f, -0.75f, 0.85f, -0.65f, 0.9f, -0.2f)
+                path.cubicTo(0.95f, 0.35f, 0.2f, 0.95f, 0f, 1f)
+                path.close()
+                p.color = 0xFFFF4D6D.toInt()
+                c.drawPath(path, p)
+                p.color = 0xFFFFD86B.toInt()
+                val sx = floatArrayOf(-0.35f, 0.35f, 0f, -0.55f, 0.55f, -0.18f, 0.18f)
+                val sy = floatArrayOf(0.05f, 0.05f, 0.45f, -0.3f, -0.3f, 0.65f, 0.65f)
+                for (i in sx.indices) c.drawOval(RectF(sx[i] - 0.07f, sy[i] - 0.1f, sx[i] + 0.07f, sy[i] + 0.1f), p)
+                p.color = 0x99FFFFFF.toInt()
+                c.drawOval(RectF(-0.72f, -0.5f, -0.42f, -0.2f), p)
+                p.color = 0xFF4CAF50.toInt()
+                for (a in floatArrayOf(-60f, -25f, 0f, 25f, 60f)) {
+                    c.save()
+                    c.translate(0f, -0.62f)
+                    c.rotate(a)
+                    c.drawOval(RectF(-0.13f, -0.5f, 0.13f, 0.05f), p)
+                    c.restore()
+                }
+            }
+            1 -> {
+                // ribbon bow
+                p.color = 0xFFFF5C8A.toInt()
+                path.reset()
+                path.moveTo(0f, 0f)
+                path.cubicTo(-0.4f, -0.95f, -1.05f, -0.8f, -1.0f, 0f)
+                path.cubicTo(-1.05f, 0.8f, -0.4f, 0.95f, 0f, 0f)
+                path.close()
+                c.drawPath(path, p)
+                path.reset()
+                path.moveTo(0f, 0f)
+                path.cubicTo(0.4f, -0.95f, 1.05f, -0.8f, 1.0f, 0f)
+                path.cubicTo(1.05f, 0.8f, 0.4f, 0.95f, 0f, 0f)
+                path.close()
+                c.drawPath(path, p)
+                p.color = 0xFFD63A6A.toInt()
+                path.reset()
+                path.moveTo(-0.1f, 0.15f); path.lineTo(-0.55f, 1f); path.lineTo(-0.15f, 0.82f); path.lineTo(0.05f, 0.3f); path.close()
+                path.moveTo(0.1f, 0.15f); path.lineTo(0.55f, 1f); path.lineTo(0.15f, 0.82f); path.lineTo(-0.05f, 0.3f); path.close()
+                c.drawPath(path, p)
+                p.color = 0xFFE23E73.toInt()
+                c.drawCircle(0f, 0f, 0.3f, p)
+                p.color = 0x99FFFFFF.toInt()
+                c.drawOval(RectF(-0.78f, -0.45f, -0.45f, -0.2f), p)
+                c.drawOval(RectF(0.45f, -0.45f, 0.78f, -0.2f), p)
+            }
+            2 -> {
+                // glossy heart
+                c.scale(0.95f, 0.95f)
+                p.color = 0xFFFF4F86.toInt()
+                c.drawPath(KeyStyles.heart, p)
+                p.color = 0x99FFFFFF.toInt()
+                c.drawOval(RectF(-0.72f, -0.62f, -0.34f, -0.28f), p)
+            }
+            3 -> {
+                // daisy
+                p.color = 0xFFFFA8CB.toInt()
+                for (i in 0 until 6) {
+                    val a = Math.toRadians(-90.0 + i * 60.0)
+                    c.drawCircle((cos(a) * 0.58).toFloat(), (sin(a) * 0.58).toFloat(), 0.42f, p)
+                }
+                p.color = 0xFFFFFFFF.toInt()
+                for (i in 0 until 6) {
+                    val a = Math.toRadians(-90.0 + i * 60.0)
+                    c.drawCircle((cos(a) * 0.55).toFloat(), (sin(a) * 0.55).toFloat(), 0.34f, p)
+                }
+                p.color = 0xFFFFC93C.toInt()
+                c.drawCircle(0f, 0f, 0.32f, p)
+            }
+            else -> {
+                // cupcake
+                p.color = 0xFFFFD79A.toInt()
+                path.reset()
+                path.moveTo(-0.75f, 0.1f); path.lineTo(0.75f, 0.1f); path.lineTo(0.52f, 0.98f); path.lineTo(-0.52f, 0.98f); path.close()
+                c.drawPath(path, p)
+                p.style = Paint.Style.STROKE
+                p.strokeWidth = 0.08f
+                p.color = 0xFFE5AE5C.toInt()
+                for (x in floatArrayOf(-0.35f, 0f, 0.35f)) c.drawLine(x * 1.05f, 0.14f, x * 0.8f, 0.94f, p)
+                p.style = Paint.Style.FILL
+                p.color = 0xFFFF8FBA.toInt()
+                c.drawOval(RectF(-0.85f, -0.18f, 0.85f, 0.38f), p)
+                p.color = 0xFFFFB6D2.toInt()
+                c.drawOval(RectF(-0.62f, -0.5f, 0.62f, 0.05f), p)
+                p.color = 0xFFFFE1EE.toInt()
+                c.drawOval(RectF(-0.4f, -0.8f, 0.4f, -0.3f), p)
+                p.color = 0xFFE53050.toInt()
+                c.drawCircle(0f, -0.88f, 0.2f, p)
+                p.color = 0x99FFFFFF.toInt()
+                c.drawCircle(-0.06f, -0.94f, 0.06f, p)
+            }
+        }
+        c.restore()
     }
 
     // ------------------------------------------------------------------ corner ornaments
