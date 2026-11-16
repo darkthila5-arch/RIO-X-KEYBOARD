@@ -50,7 +50,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private enum class Style { NORMAL, SPECIAL, ACCENT, ACTIVE }
-    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO, CALC, KEYSTYLE, NEWS }
+    private enum class Panel { NONE, CLIPBOARD, THEME, SETTINGS, EMOJI, FONTS, SNIPS, BACKGROUND, BOOM, STATUS, MAKER, TOOLS, CRYPTO, CALC, KEYSTYLE, NEWS, ART }
 
     private class Key(
         val label: String,
@@ -665,6 +665,7 @@ class RioBoardService : InputMethodService() {
             Panel.CALC -> renderCalc()
             Panel.KEYSTYLE -> renderKeyStyle()
             Panel.NEWS -> renderNews()
+            Panel.ART -> renderArt()
             Panel.NONE -> {
                 if (numberRow) root.addView(row(numberKeys()))
                 if (siMode) renderSinhala() else renderEnglish()
@@ -780,7 +781,7 @@ class RioBoardService : InputMethodService() {
             tx("spaced", "S P A C E D", 1, "A B", 13f) { spacedText() },
             tx("clap", "Clap text", 1, "\uD83D\uDC4F", 16f) { clapText() },
             tx("blank", "Blank message", 1, "[ ]", 13f) { type("\u2800") },
-            tx("divider", "Fancy divider", 1, "\u2501\u2726\u2501", 12f) { type("\u2501\u2501\u2501\u2501 \u2726 \u2501\u2501\u2501\u2501") },
+            tx("divider", "Fancy art (dividers, frames, faces, symbols)", 1, "\u2501\u2726\u2501", 12f, { panel == Panel.ART }) { togglePanel(Panel.ART) },
             // 2 edit
             ic("selall", "Select all", 2, IconView.Kind.SELECT_ALL) { menuAction(android.R.id.selectAll) },
             ic("copy", "Copy", 2, IconView.Kind.COPY) { menuAction(android.R.id.copy) },
@@ -1169,6 +1170,148 @@ class RioBoardService : InputMethodService() {
         hsv[1] = maxOf(hsv[1], 0.55f)
         hsv[2] = maxOf(hsv[2], 0.95f)
         return Color.HSVToColor(hsv)
+    }
+
+    // ----- fancy art panel: dividers, frames for your text, faces, symbols (+ the ones you used last) -----
+    private val artTabs = listOf("Dividers", "Frames", "Faces", "Symbols", "Recent")
+    private var artTab = 0
+
+    private val artDividers = listOf(
+        "━━━━ ✦ ━━━━", "──────  ✿  ──────", "┈┈┈┈┈ ❀ ┈┈┈┈┈", "•°•°•°•°•°•°•°•", "✦•······•✦•······•✦",
+        "⋆｡°✩ ━━━━━ ✩°｡⋆", "▬▬▬▬ ஜ ▬▬▬▬", "═══════ ◈ ═══════", "୨୧ ┈┈┈┈┈┈┈ ୨୧", "°❀•°:🎀:°•❀°",
+        "☆━━━━━━━☆", "♡ ───── ♡ ───── ♡", "⊹ ࣪ ˖ ───── ⊹ ࣪ ˖", "✧･ﾟ: *✧･ﾟ:*  *:･ﾟ✧*:･ﾟ✧",
+        "▁▂▃▄▅▆▇█▇▆▅▄▃▂▁", "◤◢◤◢◤◢◤◢◤◢◤◢", "⋘ ─────── ⋙", "🌸━━━━━━━━🌸", "★彡 ━━━━━ 彡★",
+        "·.·´¯`·.·★·.·´¯`·.·", "•·.·´¯`·.·• ❤ •·.·´¯`·.·•", "✿･ﾟ･✿･ﾟ･✿･ﾟ･✿", "┏━━━━━━━━━━━━━┓",
+        "┗━━━━━━━━━━━━━┛", "╔═════════════╗", "╚═════════════╝", "- - - - - - - - - -", "~~~~~~~~~~~~~~~~",
+        "❖ ── ✦ ── ❖", "🔥━━━━━🔥━━━━━🔥", "💫 ⋆ ✩ ⋆ 💫", "▰▰▰▰▰▰▰▰▰▰", "⎯⎯⎯⎯ ⌘ ⎯⎯⎯⎯", "𓆩♡𓆪 ┈┈┈┈┈ 𓆩♡𓆪"
+    )
+
+    /** {} = your text */
+    private val artFrames = listOf(
+        "『{}』", "【{}】", "《{}》", "「{}」", "✦ {} ✦", "❀ {} ❀", "•°• {} •°•", "꧁{}꧂",
+        "✧･ﾟ: *{}*:･ﾟ✧", "♡ {} ♡", "★彡 {} 彡★", "୨୧ {} ୨୧", "⋆｡°✩ {} ✩°｡⋆", "┏━ {} ━┓",
+        "▬▬ {} ▬▬", "✿ {} ✿", "🌸 {} 🌸", "🔥 {} 🔥", "⚡ {} ⚡", "𓆩 {} 𓆪", "｡･:*:･ﾟ★ {} ★ﾟ･:*:･｡", "❝{}❞"
+    )
+
+    private val artFaces = listOf(
+        "(◕‿◕✿)", "(づ｡◕‿‿◕｡)づ", "ʕ•ᴥ•ʔ", "(≧◡≦)", "( ˘▽˘)っ♨", "(╯°□°）╯︵ ┻━┻", "¯\\_(ツ)_/¯", "(ಥ﹏ಥ)",
+        "(◍•ᴗ•◍)❤", "٩(◕‿◕｡)۶", "(｡♥‿♥｡)", "ヽ(´▽`)/", "(⌐■_■)", "(¬‿¬)", "(｡•́︿•̀｡)", "(ノ◕ヮ◕)ノ*:･ﾟ✧",
+        "(♡´▽`♡)", "ᕦ(ò_óˇ)ᕤ", "(ᵔᴥᵔ)", "૮₍ ˶ᵔ ᵕ ᵔ˶ ₎ა", "(｡•̀ᴗ-)✧", "(っ˘ω˘ς )", "(๑>◡<๑)", "(*^‿^*)"
+    )
+
+    private val artSymbols = ("★ ☆ ✦ ✧ ✩ ✪ ✫ ✬ ❀ ✿ ❁ ❃ ❋ ♡ ♥ ❤ ❥ ❣ ☘ ☾ ☽ ☀ ☁ ☂ ♪ ♫ ♬ ✔ ✘ ➤ ➜ ➔ ► ◄ ▲ ▼ ◆ ◇ ● ○ ◎ ■ □ " +
+        "✂ ✈ ☎ ✉ ☮ ☯ ∞ ≈ ≠ ± × ÷ © ® ™ ° ‣ • ◦ ※ ⁂ ✱ ❖ ✾ ❂ ☻ ☺ ⚘ ⚜ ♔ ♕ ♚ ♛ ✡ ☪ ❝ ❞ « » ‹ › ⋆ ˚ ʚ ɞ ꒰ ꒱ ᵔ ᴗ ˃ ˂ ♢ ♤ ♧").split(" ")
+
+    private fun artRecent(): List<String> =
+        (prefs.getString("art_recent", "") ?: "").split("\u0001").filter { it.isNotEmpty() }
+
+    private fun artRemember(s: String) {
+        val l = ArrayList<String>(artRecent())
+        l.remove(s)
+        l.add(0, s)
+        prefs.edit().putString("art_recent", l.take(14).joinToString("\u0001")).apply()
+    }
+
+    /** Puts art into the text box. Dividers get their own line. */
+    private fun artInsert(s: String, ownLine: Boolean) {
+        val ic = currentInputConnection ?: return
+        flushSinglish()
+        var out = s
+        if (ownLine) {
+            val b = ic.getTextBeforeCursor(1, 0)?.toString() ?: ""
+            out = (if (b.isNotEmpty() && b != "\n") "\n" else "") + s + "\n"
+        }
+        ic.commitText(out, 1)
+        artRemember(s)
+    }
+
+    /** Wraps the selected text (or the line before the cursor) with a frame; with nothing to wrap the cursor lands inside it. */
+    private fun artWrap(frame: String) {
+        val ic = currentInputConnection ?: return
+        flushSinglish()
+        val pre = frame.substringBefore("{}")
+        val post = frame.substringAfter("{}")
+        val sel = ic.getSelectedText(0)?.toString()
+        if (!sel.isNullOrEmpty()) {
+            ic.commitText(pre + sel + post, 1)
+        } else {
+            val line = (ic.getTextBeforeCursor(200, 0)?.toString() ?: "").substringAfterLast('\n')
+            if (line.isNotBlank()) {
+                ic.beginBatchEdit()
+                ic.deleteSurroundingText(line.length, 0)
+                ic.commitText(pre + line.trim() + post, 1)
+                ic.endBatchEdit()
+            } else {
+                ic.beginBatchEdit()
+                ic.commitText(pre, 1)
+                ic.commitText(post, 0)       // cursor stays between the two halves
+                ic.endBatchEdit()
+            }
+        }
+        artRemember(frame)
+    }
+
+    private fun renderArt() {
+        root.addView(panelHeader("Fancy art"))
+        root.addView(chipRow(artTabs, artTab) {
+            artTab = it
+            render()
+        })
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(2), dp(4), dp(8))
+        }
+        fun grid(items: List<String>, perRow: Int, sp: Float, heightDp: Int, label: (String) -> String, tap: (String) -> Unit) {
+            items.chunked(perRow).forEach { rowItems ->
+                val r = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(heightDp))
+                }
+                rowItems.forEach { s ->
+                    r.addView(TextView(this).apply {
+                        text = label(s)
+                        gravity = Gravity.CENTER
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                        setTextColor(th.text)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+                        background = roundBg(th.key, 10)
+                        isClickable = true
+                        setPadding(dp(4), 0, dp(4), 0)
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f).apply {
+                            setMargins(dp(3), dp(3), dp(3), dp(3))
+                        }
+                        setOnClickListener {
+                            feedback(it)
+                            tap(s)
+                        }
+                    })
+                }
+                repeat(perRow - rowItems.size) {
+                    r.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+                }
+                list.addView(r)
+            }
+        }
+        when (artTab) {
+            0 -> grid(artDividers, 1, 15f, 40, { it }) { artInsert(it, true) }
+            1 -> {
+                list.addView(hintText("Select text (or write a line), then tap a frame. With nothing written the frame opens empty."))
+                grid(artFrames, 2, 14f, 42, { it.replace("{}", "text") }) { artWrap(it) }
+            }
+            2 -> grid(artFaces, 2, 16f, 42, { it }) { artInsert(it, false) }
+            3 -> grid(artSymbols, 8, 20f, 42, { it }) { artInsert(it, false) }
+            else -> {
+                val rec = artRecent()
+                if (rec.isEmpty()) list.addView(hintText("Nothing yet. The art you use shows up here."))
+                else grid(rec, 2, 14f, 42, { it.replace("{}", "text") }) { if (it.contains("{}")) artWrap(it) else artInsert(it, artDividers.contains(it)) }
+            }
+        }
+        root.addView(ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH * 4) - dp(42))
+            isVerticalScrollBarEnabled = false
+            addView(list)
+        })
     }
 
     // ----- key style panel: live sample keys + template and decoration pickers -----
