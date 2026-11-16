@@ -847,6 +847,7 @@ class RioBoardService : InputMethodService() {
             tx("gvoice", "Google voice search", 1, "G\uD83C\uDFA4", 12f) { googleVoice() },
             tx("qrmake", "QR code maker", 1, "QR", 15f) { qrMake() },
             tx("qrread", "QR reader", 1, "QR\uD83D\uDCF7", 11f) { qrRead() },
+            tx("voicefx", "Voice changer", 1, "\uD83C\uDFA4\u2728", 14f) { voiceChanger() },
             tx("mock", "sPoNgE text", 1, "aBc", 13f) { mockText() },
             tx("flip", "Upside down", 1, "\u0250q", 14f) { flipText() },
             tx("spaced", "S P A C E D", 1, "A B", 13f) { spacedText() },
@@ -4247,6 +4248,15 @@ class RioBoardService : InputMethodService() {
             sendSticker(f)
         } catch (e: Exception) {
             toast("Could not make the QR code")
+        }
+    }
+
+    private fun voiceChanger() {
+        flushSinglish()
+        try {
+            startActivity(Intent(this, VoiceChangerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            toast("Could not open the voice changer")
         }
     }
 

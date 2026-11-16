@@ -4,6 +4,8 @@
     <!-- only used to read the config.json link in RemoteConfig.kt (themes, news). Nothing typed is ever sent. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- only for the Voice changer tool, asked when you first record -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- lets the app open Android's installer for its own updates (UpdateActivity) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
@@ -81,6 +83,13 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- Voice changer: record, effect, send as an audio file -->
+        <activity
+            android:name=".VoiceChangerActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
 
         <!-- QR reader: camera scan (Google code scanner) or from a picture -->
         <activity

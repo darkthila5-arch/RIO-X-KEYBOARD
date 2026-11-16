@@ -458,7 +458,11 @@ object StickerStore {
         dir(ctx).listFiles { f -> f.isFile && !f.name.startsWith("pk_") && (f.name.endsWith(".png") || f.name.endsWith(".gif")) }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
 
-    fun mimeOf(f: File): String = if (f.name.endsWith(".gif")) "image/gif" else "image/png"
+    fun mimeOf(f: File): String = when {
+        f.name.endsWith(".gif") -> "image/gif"
+        f.name.endsWith(".m4a") -> "audio/mp4"          // voice changer files
+        else -> "image/png"
+    }
 
     /** Blocking: call from a background thread. */
     fun make(ctx: Context, spec: StickerSpec, gif: Boolean): File {
