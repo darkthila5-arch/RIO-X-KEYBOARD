@@ -215,6 +215,9 @@ class RioBoardService : InputMethodService() {
     private var boomStatusText = ""
     private var boomStatus: TextView? = null
     private val boomStep = Runnable { boomTick() }
+    private var boomKey = ""              // which chat box the boom was started in (package/field id)
+    private var boomChecking = false      // we pressed send last tick: check that the box was really emptied
+    private var boomFails = 0
     private var keyPreview = true     // iPhone-style key pop-up bubble
     private var previewPopup: android.widget.PopupWindow? = null
     private var previewTv: TextView? = null
@@ -471,7 +474,7 @@ class RioBoardService : InputMethodService() {
         makeWindowTransparent()
         if (shift == 1) shift = 0
         panel = Panel.NONE
-        if (boomRunning && restarting != true) {
+        if (boomRunning && boomKeyOf(info) != boomKey) {      // same chat box (apps restart it after every send): keep going
             boomRunning = false
             handler.removeCallbacks(boomStep)
             boomStatusText = "Stopped"
@@ -1776,41 +1779,63 @@ class RioBoardService : InputMethodService() {
         boomStatus?.text = t
     }
 
+    private fun boomKeyOf(info: EditorInfo?): String = (info?.packageName ?: "") + "/" + (info?.fieldId ?: 0)
+
     private fun boomStart() {
         flushSinglish()
         val ic = currentInputConnection ?: return
-        var msg = ic.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)?.text?.toString() ?: ""
-        if (msg.isBlank()) {
-            msg = (ic.getTextBeforeCursor(500, 0)?.toString() ?: "") + (ic.getTextAfterCursor(500, 0)?.toString() ?: "")
-        }
+        val msg = readField(ic).all.trim()
         if (msg.isBlank()) {
             boomSetStatus("Type a message in the chat box first")
             return
         }
         boomMsg = msg
+        boomKey = boomKeyOf(currentInputEditorInfo)
         boomTotal = boomCounts[boomCountIdx]
         boomLeft = boomTotal
+        boomChecking = false
+        boomFails = 0
         boomRunning = true
         boomSetStatus("Sending...")
         handler.post(boomStep)
         render()
     }
 
+    /** One round: make sure the chat box holds exactly the message, press send, check on the next round that it went. */
     private fun boomTick() {
         if (!boomRunning) return
-        if (boomLeft <= 0) {
-            boomStop("Done: $boomTotal sent")
-            return
-        }
         val ic = currentInputConnection
         if (ic == null) {
             boomStop("Stopped")
             return
         }
-        val cur = ic.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)?.text?.toString() ?: ""
-        if (cur.isEmpty()) ic.commitText(boomMsg, 1)
+        val f = readField(ic)
+        val cur = f.all
+        if (boomChecking) {
+            boomChecking = false
+            if (cur.trim() == boomMsg) {
+                // still sitting in the box: the app did not send it
+                boomLeft++
+                boomFails++
+                if (boomFails >= 2) {
+                    boomStop("Not sending. In WhatsApp turn on Settings > Chats > Enter is send, then try again")
+                    return
+                }
+            } else {
+                boomFails = 0
+            }
+        }
+        if (boomLeft <= 0) {
+            boomStop("Done: $boomTotal sent")
+            return
+        }
+        if (cur.trim() != boomMsg) {
+            // box is empty (after a send) or has something else: put exactly the message in it
+            replaceWholeField(ic, f, boomMsg)
+        }
         pressEnter()
         boomLeft--
+        boomChecking = true
         boomSetStatus("Sent ${boomTotal - boomLeft}/$boomTotal")
         handler.postDelayed(boomStep, boomDelays[boomDelayIdx])
     }
