@@ -242,6 +242,8 @@ class RioBoardService : InputMethodService() {
     private var toolbarX = 0
     private var clearArmed = false
     private var toolsPinned = false
+    private var barScrollX = 0            // remembered scroll position of the swipeable tool bar
+    private var barMsg: String? = null     // short message shown in the top bar (word count etc.)
     private var suggestions: List<String> = emptyList()
     private val clips = ArrayList<String>()
     private val learned = HashMap<String, Int>()
@@ -725,8 +727,9 @@ class RioBoardService : InputMethodService() {
     private fun refreshBar() {
         if (!::barHolder.isInitialized) return
         barHolder.removeAllViews()
-        val showSug = suggestions.isNotEmpty() && panel == Panel.NONE && !toolsPinned
-        val bar = if (showSug) suggestionStrip() else toolbar()
+        val msg = barMsg
+        val showSug = msg == null && suggestions.isNotEmpty() && panel == Panel.NONE && !toolsPinned
+        val bar = if (msg != null) messageStrip(msg) else if (showSug) suggestionStrip() else toolbar()
         barHolder.addView(bar)
         if (showSug != lastShowSug) {            // soft cross-fade only when the bar changes kind
             lastShowSug = showSug
@@ -890,6 +893,7 @@ class RioBoardService : InputMethodService() {
             setPadding(dp(4), 0, dp(4), 0)
         }
         val circle = 38
+        if (!editing) return swipeToolbar(bar, circle)
         pinned.forEachIndexed { i, id ->
             val t = toolById(id) ?: return@forEachIndexed
             val slot = FrameLayout(this).apply {
@@ -939,6 +943,87 @@ class RioBoardService : InputMethodService() {
         tc.addView(iv, FrameLayout.LayoutParams(sz, sz, Gravity.CENTER))
         toggle.addView(tc, FrameLayout.LayoutParams(dp(circle), dp(circle), Gravity.CENTER))
         bar.addView(toggle)
+        return bar
+    }
+
+    /** Short text in the top bar (used by Word count). Goes away by itself. */
+    private fun showBarMsg(msg: String) {
+        barMsg = msg
+        refreshBar()
+        handler.removeCallbacks(clearBarMsg)
+        handler.postDelayed(clearBarMsg, 3500)
+    }
+
+    private val clearBarMsg = Runnable {
+        if (barMsg != null) {
+            barMsg = null
+            refreshBar()
+        }
+    }
+
+    private fun messageStrip(msg: String): View = TextView(this).apply {
+        text = msg
+        gravity = Gravity.CENTER
+        maxLines = 1
+        ellipsize = TextUtils.TruncateAt.END
+        setTextColor(th.accent)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        typeface = Typeface.DEFAULT_BOLD
+        isClickable = true
+        setOnClickListener { barMsg = null; refreshBar() }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+    }
+
+    /**
+     * Normal top bar: swipe sideways to reach EVERY tool (your pinned 6 come first),
+     * the expand button stays fixed on the right.
+     */
+    private fun swipeToolbar(bar: LinearLayout, circle: Int): View {
+        val total = if (::root.isInitialized && root.width > 0) root.width else resources.displayMetrics.widthPixels
+        val slotW = (total - dp(8)) / 7
+        val ordered = ArrayList<Tool>()
+        pinned.forEach { id -> toolById(id)?.let { ordered.add(it) } }
+        toolList.forEach { t -> if (ordered.none { it.id == t.id }) ordered.add(t) }
+
+        val strip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        ordered.forEach { t ->
+            val slot = FrameLayout(this).apply {
+                isClickable = true
+                setOnClickListener {
+                    feedback(it)
+                    runTool(t)
+                }
+            }
+            slot.addView(toolCircle(t, circle, t.active()), FrameLayout.LayoutParams(dp(circle), dp(circle), Gravity.CENTER))
+            strip.addView(slot, LinearLayout.LayoutParams(slotW, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        val sv = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isFillViewport = false
+            addView(strip, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            setOnScrollChangeListener { _, x, _, _, _ -> barScrollX = x }
+            post { scrollTo(barScrollX, 0) }
+        }
+        bar.addView(sv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 6f))
+
+        val toggle = FrameLayout(this).apply {
+            isClickable = true
+            setOnClickListener {
+                feedback(it)
+                flushSinglish()
+                panel = Panel.TOOLS
+                render()
+            }
+        }
+        val iv = IconView(this, IconView.Kind.COLLAPSE)
+        iv.tint = th.text
+        val sz = dp((circle * 0.66f).toInt())
+        toggle.addView(iv, FrameLayout.LayoutParams(sz, sz, Gravity.CENTER))
+        bar.addView(toggle, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
         return bar
     }
 
@@ -3588,7 +3673,58 @@ class RioBoardService : InputMethodService() {
         refreshBar()
     }
 
-    /** Selected text (or the word before the cursor): UPPER -> lower -> Title -> UPPER ... */
+    /**
+     * WhatsApp "Read more" message. Line 1 stays visible; everything after it is pushed behind a
+     * "Read more" link by a long run of invisible characters. Tap the tool again to undo.
+     */
+    /** Whole text of the field, split around the cursor. Works in apps that refuse huge getTextBeforeCursor requests. */
+    private class FieldText(val before: String, val sel: String, val after: String) {
+        val all: String get() = before + sel + after
+    }
+
+    private fun readField(ic: android.view.inputmethod.InputConnection): FieldText {
+        // 1) ExtractedText: the app hands over the full text + selection in one go
+        try {
+            val req = android.view.inputmethod.ExtractedTextRequest().apply { hintMaxChars = 1000000; hintMaxLines = 100000 }
+            val et = ic.getExtractedText(req, 0)
+            val txt = et?.text?.toString()
+            if (et != null && txt != null && et.startOffset == 0 && et.partialStartOffset <= 0 && txt.isNotEmpty()) {
+                val a = minOf(maxOf(minOf(et.selectionStart, et.selectionEnd), 0), txt.length)
+                val b = minOf(maxOf(maxOf(et.selectionStart, et.selectionEnd), 0), txt.length)
+                return FieldText(txt.substring(0, a), txt.substring(a, b), txt.substring(b))
+            }
+        } catch (e: Exception) {
+        }
+        // 2) old way, but retry with smaller sizes because some apps return null for big requests
+        fun grab(before: Boolean): String {
+            for (n in intArrayOf(100000, 20000, 5000, 1000)) {
+                val r = try {
+                    (if (before) ic.getTextBeforeCursor(n, 0) else ic.getTextAfterCursor(n, 0))?.toString()
+                } catch (e: Exception) {
+                    null
+                }
+                if (r != null && (r.isNotEmpty() || n == 1000)) return r
+            }
+            return ""
+        }
+        val sel = try { ic.getSelectedText(0)?.toString() ?: "" } catch (e: Exception) { "" }
+        return FieldText(grab(true), sel, grab(false))
+    }
+
+    /** Replaces the whole field with [text]; double-checks and falls back to select-all when the app ignores big deletes. */
+    private fun replaceWholeField(ic: android.view.inputmethod.InputConnection, f: FieldText, text: String) {
+        ic.beginBatchEdit()
+        if (f.sel.isNotEmpty()) ic.commitText("", 1)
+        ic.deleteSurroundingText(f.before.length, f.after.length)
+        ic.endBatchEdit()
+        val left = readField(ic).all
+        if (left.isNotEmpty()) {
+            ic.performContextMenuAction(android.R.id.selectAll)
+            ic.commitText("", 1)
+        }
+        ic.commitText(text, 1)
+    }
+
     /**
      * WhatsApp "Read more" message. Line 1 stays visible; everything after it is pushed behind a
      * "Read more" link by a long run of invisible characters. Tap the tool again to undo.
@@ -3596,9 +3732,8 @@ class RioBoardService : InputMethodService() {
     private fun makeReadMore() {
         val ic = currentInputConnection ?: return
         flushSinglish()
-        val before = ic.getTextBeforeCursor(100000, 0)?.toString() ?: ""
-        val after = ic.getTextAfterCursor(100000, 0)?.toString() ?: ""
-        val all = before + after
+        val f = readField(ic)
+        val all = f.all
         if (all.isBlank()) {
             toast("Type your message first")
             return
@@ -3619,14 +3754,12 @@ class RioBoardService : InputMethodService() {
             out = head + zw.toString().repeat(READ_MORE_PAD) + "\n" + rest
             toast("Read more ready - press send")
         }
-        ic.beginBatchEdit()
-        ic.deleteSurroundingText(before.length, after.length)
-        ic.commitText(out, 1)
-        ic.endBatchEdit()
+        replaceWholeField(ic, f, out)
         suggestions = computeSuggestions()
         render()
     }
 
+    /** Selected text (or the word before the cursor): UPPER -> lower -> Title -> UPPER ... */
     private fun changeCase() {
         val ic = currentInputConnection ?: return
         flushSinglish()
@@ -3688,12 +3821,14 @@ class RioBoardService : InputMethodService() {
     private fun wordCount() {
         val ic = currentInputConnection ?: return
         flushSinglish()
-        val sel = ic.getSelectedText(0)?.toString()
-        val hasSel = !sel.isNullOrEmpty()
-        val s: String = if (hasSel) sel!! else
-            (ic.getTextBeforeCursor(20000, 0)?.toString() ?: "") + (ic.getTextAfterCursor(20000, 0)?.toString() ?: "")
-        val words = s.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.size
-        toast("$words words \u00B7 ${s.length} characters" + (if (hasSel) " (selected)" else ""))
+        val f = readField(ic)
+        val hasSel = f.sel.isNotEmpty()
+        val s = if (hasSel) f.sel else f.all
+        val words = s.replace('\u200B', ' ').trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.size
+        val chars = s.count { it != '\u200B' }
+        val msg = "$words words \u00B7 $chars characters" + (if (hasSel) " (selected)" else "")
+        toast(msg)
+        showBarMsg(msg)
     }
 
     private fun mockText() = transformText { src ->
@@ -3743,6 +3878,7 @@ class RioBoardService : InputMethodService() {
     private fun type(s: String) {
         val ic = currentInputConnection
         toolsPinned = false
+        if (barMsg != null) { barMsg = null }
         undoCorr = null
         swipeCommitted = null
         val isSep = s.length == 1 && !isWordChar(s[0])
