@@ -844,6 +844,7 @@ class RioBoardService : InputMethodService() {
             tx("wcount", "Word count", 1, "#W", 13f) { wordCount() },
             tx("gsearch", "Google search", 1, "G", 18f) { googleSearch() },
             tx("gtrans", "Google Translate", 1, "\u6587A", 14f) { googleTranslate() },
+            tx("ytsearch", "YouTube search", 1, "\u25B6", 18f) { youtubeSearch() },
             tx("gvoice", "Google voice search", 1, "G\uD83C\uDFA4", 12f) { googleVoice() },
             tx("qrmake", "QR code maker", 1, "QR", 15f) { qrMake() },
             tx("qrread", "QR reader", 1, "QR\uD83D\uDCF7", 11f) { qrRead() },
@@ -4033,6 +4034,7 @@ class RioBoardService : InputMethodService() {
 
     // ----- Google search and translate, inside the keyboard -----
     private var gWeb: android.webkit.WebView? = null
+    private var webKind = 0              // 0 = Google, 1 = YouTube (same panel, same web view)
     private var trSource = ""
     private var trResult = ""
     private var trStatus = ""
@@ -4052,6 +4054,7 @@ class RioBoardService : InputMethodService() {
         }
         try {
             val w = gWebView()
+            webKind = 0
             w.loadUrl("https://www.google.com/search?q=" + java.net.URLEncoder.encode(q, "UTF-8"))
             panel = Panel.GSEARCH
             render()
@@ -4059,6 +4062,33 @@ class RioBoardService : InputMethodService() {
             val web = Intent(Intent.ACTION_WEB_SEARCH).putExtra(android.app.SearchManager.QUERY, q)
             if (!launch(web)) toast("Could not open Google")
         }
+    }
+
+    /** Selected text (or the whole text box) is searched on YouTube, inside the keyboard like Google. */
+    private fun youtubeSearch() {
+        val q = googleQuery()
+        if (q.isEmpty()) {
+            toast("Type or select what to search on YouTube first")
+            return
+        }
+        try {
+            val w = gWebView()
+            webKind = 1
+            w.loadUrl("https://m.youtube.com/results?search_query=" + java.net.URLEncoder.encode(q, "UTF-8"))
+            panel = Panel.GSEARCH
+            render()
+        } catch (e: Exception) {
+            val url = "https://www.youtube.com/results?search_query=" + java.net.URLEncoder.encode(q, "UTF-8")
+            if (!launch(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))) toast("Could not open YouTube")
+        }
+    }
+
+    /** A video page becomes the short youtu.be link when it is put in the chat. */
+    private fun shareUrl(u: String): String {
+        if (webKind != 1 || u.isEmpty()) return u
+        val uri = android.net.Uri.parse(u)
+        val v = if (uri.host?.contains("youtube.com") == true) uri.getQueryParameter("v") else null
+        return if (!v.isNullOrEmpty()) "https://youtu.be/$v" else u
     }
 
     private fun gWebView(): android.webkit.WebView {
@@ -4073,7 +4103,7 @@ class RioBoardService : InputMethodService() {
     }
 
     private fun renderGSearch() {
-        root.addView(panelHeader("Google"))
+        root.addView(panelHeader(if (webKind == 1) "YouTube" else "Google"))
         val w = try { gWebView() } catch (e: Exception) { null }
         if (w == null) {
             root.addView(hintText("The web view is not available on this phone."))
@@ -4085,7 +4115,7 @@ class RioBoardService : InputMethodService() {
                 0 -> if (w.canGoBack()) w.goBack() else { panel = Panel.NONE; render() }
                 1 -> w.reload()
                 2 -> {
-                    val url = w.url ?: ""
+                    val url = shareUrl(w.url ?: "")
                     if (url.isNotEmpty()) {
                         currentInputConnection?.commitText(url, 1)
                         panel = Panel.NONE

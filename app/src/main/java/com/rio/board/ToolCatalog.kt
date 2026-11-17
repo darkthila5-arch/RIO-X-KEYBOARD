@@ -25,6 +25,7 @@ object ToolCatalog {
             Item("lock", "\uD83D\uDD12", "Secret message"), Item("wcount", "#W", "Word count"),
             Item("gsearch", "G", "Google search"), Item("gtrans", "\u6587A", "Translate"),
             Item("gvoice", "G\uD83C\uDFA4", "Google voice"),
+            Item("ytsearch", "\u25B6", "YouTube"),
             Item("qrmake", "QR", "QR maker"), Item("qrread", "QR\uD83D\uDCF7", "QR reader"),
             Item("voicefx", "\uD83C\uDFA4\u2728", "Voice changer"),
             Item("mock", "aBc", "sPoNgE"), Item("flip", "\u0250q", "Upside down"),
