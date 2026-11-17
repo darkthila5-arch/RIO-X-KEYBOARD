@@ -106,7 +106,7 @@ class MainActivity : Activity() {
                     gravity = Gravity.CENTER
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                     setPadding(0, dp(6), 0, dp(6))
-                    layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f)
+                    layoutParams = LinearLayout.LayoutParams(0, WRAP, 1f).apply { setMargins(dp(6), dp(2), dp(6), dp(2)) }
                     setOnClickListener { selectTab(i) }
                 }
                 tabs.add(t)
@@ -134,7 +134,10 @@ class MainActivity : Activity() {
 
     private fun selectTab(i: Int) {
         pages.forEachIndexed { k, v -> v.visibility = if (k == i) View.VISIBLE else View.GONE }
-        tabs.forEachIndexed { k, t -> t.setTextColor(if (k == i) PINK else SUB) }
+        tabs.forEachIndexed { k, t ->
+            t.setTextColor(if (k == i) Color.WHITE else SUB)
+            t.background = if (k == i) bg(0x40FF4D8D, 18) else null      // soft pill behind the open tab
+        }
         pages[i].alpha = 0f
         pages[i].animate().alpha(1f).setDuration(220).start()
     }
@@ -481,7 +484,13 @@ class MainActivity : Activity() {
                 }
             }
         )
-        return pageOf(pageHeader("Typing", "Languages, tools, Singlish, animations, shortcuts and styles"), languagesCard(), toolbarCard(), toolsOnOffCard(), singlish, singlishGuideCard(), wordFxCard(), shortcuts, styles)
+        return pageOf(
+            pageHeader("Typing", "Languages, Singlish, toolbar, fun and shortcuts"),
+            sectionLabel("Languages and Singlish"), languagesCard(), singlish, singlishGuideCard(),
+            sectionLabel("Toolbar"), toolbarCard(), toolsOnOffCard(),
+            sectionLabel("Fun"), wordFxCard(),
+            sectionLabel("Shortcuts and styles"), shortcuts, styles
+        )
     }
 
     // ------------------------------------------------------------------ word animations
@@ -757,7 +766,12 @@ class MainActivity : Activity() {
             title("\uD83C\uDFA8  Themes"),
             note("Change the keyboard colours from the keyboard itself: open the keyboard and tap the theme button in the toolbar. New themes from the RIO team appear there automatically.")
         )
-        return pageOf(pageHeader("Look", "Make the keyboard yours"), effectsCard(), bgCard, videoCard(), themes)
+        return pageOf(
+            pageHeader("Look", "Make the keyboard yours"),
+            sectionLabel("Effects"), effectsCard(),
+            sectionLabel("Background"), bgCard, videoCard(),
+            sectionLabel("Themes"), themes
+        )
     }
 
     // ------------------------------------------------------------------ MORE
@@ -813,7 +827,11 @@ class MainActivity : Activity() {
                 }, 2500)
             }
         )
-        return pageOf(pageHeader("More", "Tools and info"), wa, fonts, about)
+        return pageOf(
+            pageHeader("More", "Tools and info"),
+            sectionLabel("WhatsApp"), wa,
+            sectionLabel("Help and info"), fonts, about
+        )
     }
 
     private fun refreshStatusInfo() {
@@ -1153,18 +1171,54 @@ class MainActivity : Activity() {
         setLineSpacing(0f, 1.15f)
     }
 
-    private fun pageHeader(t: String, sub: String): View = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        layoutParams = lp(bottom = 16)
-        addView(tv(t, 28f, Color.WHITE, true))
-        addView(tv(sub, 14f, SUB))
+    /** Coloured banner at the top of each tab (same family as the Home hero, own colours per tab). */
+    private fun pageHeader(t: String, sub: String): View {
+        val (c1, c2, icon) = when (t) {
+            "Typing" -> Triple(0xFF4A3CFF.toInt(), 0xFFB14DFF.toInt(), "\u2328\uFE0F")
+            "Look" -> Triple(0xFFFF5E8A.toInt(), 0xFFFF9A4D.toInt(), "\uD83C\uDFA8")
+            "More" -> Triple(0xFF394261.toInt(), 0xFF5B6694.toInt(), "\u2699\uFE0F")
+            else -> Triple(0xFF4A3CFF.toInt(), 0xFFB14DFF.toInt(), "\u2728")
+        }
+        val f = FrameLayout(this).apply {
+            background = grad(c1, c2, 26)
+            layoutParams = lp(bottom = 16)
+        }
+        f.addView(KeyGridView(this), FrameLayout.LayoutParams(MATCH, MATCH))
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(18))
+        }
+        row.addView(TextView(this).apply {
+            text = icon
+            gravity = Gravity.CENTER
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0x38FFFFFF) }
+            layoutParams = LinearLayout.LayoutParams(dp(54), dp(54))
+        })
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, 0, 0)
+        }
+        col.addView(tv(t, 26f, Color.WHITE, true).apply { letterSpacing = 0.03f })
+        col.addView(tv(sub, 13f, 0xE6FFFFFF.toInt()))
+        row.addView(col)
+        f.addView(row, FrameLayout.LayoutParams(MATCH, WRAP))
+        return f
     }
 
     private fun card(vararg views: View): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        background = bg(CARD, 18)
+        background = bg(CARD, 22, 0x1AFFFFFF)
         setPadding(dp(16), dp(16), dp(16), dp(16))
         layoutParams = lp(bottom = 12)
+        // small gradient pill on top of every card: the RIO accent
+        addView(View(this@MainActivity).apply {
+            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(PINK, PURPLE)).apply {
+                cornerRadius = dp(2).toFloat()
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(4)).apply { bottomMargin = dp(10) }
+        })
         views.forEach { addView(it) }
     }
 
@@ -1211,7 +1265,7 @@ class MainActivity : Activity() {
     private fun buttonBg(primary: Boolean, radius: Int): GradientDrawable =
         if (primary) GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(PINK, PURPLE)).apply {
             cornerRadius = dp(radius).toFloat()
-        } else bg(Color.parseColor("#2F3340"), radius)
+        } else bg(Color.parseColor("#2F3340"), radius, 0x22FFFFFF)
 
     private fun exampleRow(a: String, b: String): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
