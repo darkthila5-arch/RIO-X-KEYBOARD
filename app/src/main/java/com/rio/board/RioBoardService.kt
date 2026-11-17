@@ -4083,6 +4083,20 @@ class RioBoardService : InputMethodService() {
         }
     }
 
+    /** The video id of a YouTube watch / shorts / youtu.be address, or null on a results page. */
+    private fun ytIdFrom(u: String): String? {
+        if (u.isEmpty()) return null
+        val uri = android.net.Uri.parse(u)
+        val host = uri.host ?: return null
+        val id = when {
+            host.contains("youtu.be") -> uri.pathSegments.firstOrNull()
+            host.contains("youtube.com") && uri.path?.startsWith("/watch") == true -> uri.getQueryParameter("v")
+            host.contains("youtube.com") && uri.pathSegments.size >= 2 && uri.pathSegments[0] == "shorts" -> uri.pathSegments[1]
+            else -> null
+        }
+        return if (id != null && Regex("[A-Za-z0-9_-]{6,20}").matches(id)) id else null
+    }
+
     /** A video page becomes the short youtu.be link when it is put in the chat. */
     private fun shareUrl(u: String): String {
         if (webKind != 1 || u.isEmpty()) return u
@@ -4110,11 +4124,18 @@ class RioBoardService : InputMethodService() {
             return
         }
         val tall = prefs.getBoolean("gtall", true)
-        root.addView(chipRow(listOf("\u25C0 Back", "\u21BB", "Link", "Open", if (tall) "\u25BC Small" else "\u25B2 Big"), -1) { i ->
-            when (i) {
-                0 -> if (w.canGoBack()) w.goBack() else { panel = Panel.NONE; render() }
-                1 -> w.reload()
-                2 -> {
+        val labels = ArrayList<String>()
+        labels.add("\u25C0 Back")
+        labels.add("\u21BB")
+        labels.add("Link")
+        labels.add("Open")
+        if (webKind == 1) labels.add("\u25A3 Float")
+        labels.add(if (tall) "\u25BC Small" else "\u25B2 Big")
+        root.addView(chipRow(labels, -1) { i ->
+            when (labels[i]) {
+                "\u25C0 Back" -> if (w.canGoBack()) w.goBack() else { panel = Panel.NONE; render() }
+                "\u21BB" -> w.reload()
+                "Link" -> {
                     val url = shareUrl(w.url ?: "")
                     if (url.isNotEmpty()) {
                         currentInputConnection?.commitText(url, 1)
@@ -4122,11 +4143,21 @@ class RioBoardService : InputMethodService() {
                         render()
                     }
                 }
-                3 -> {
+                "Open" -> {
                     val url = w.url ?: ""
                     if (url.isNotEmpty() && !launch(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))) toast("Could not open it")
                 }
-                4 -> {                       // taller keyboard for reading results, or back to the normal size
+                "\u25A3 Float" -> {
+                    // the video turns into a small floating window that keeps playing when the keyboard closes
+                    val vid = ytIdFrom(w.url ?: "")
+                    if (vid == null) {
+                        toast("Open a video first, then tap Float")
+                    } else {
+                        w.evaluateJavascript("document.querySelectorAll('video').forEach(function(v){v.pause()})", null)
+                        if (!launch(Intent(this, YtPlayerActivity::class.java).putExtra("id", vid))) toast("Could not open the floating player")
+                    }
+                }
+                else -> {                    // taller keyboard for reading results, or back to the normal size
                     prefs.edit().putBoolean("gtall", !tall).apply()
                     render()
                 }

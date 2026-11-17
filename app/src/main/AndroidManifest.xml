@@ -84,6 +84,17 @@
             android:taskAffinity=""
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Floating YouTube player (Picture-in-Picture): keeps playing when the keyboard closes -->
+        <activity
+            android:name=".YtPlayerActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:resizeableActivity="true"
+            android:supportsPictureInPicture="true"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard|uiMode"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
         <!-- About RIO BOARD page -->
         <activity
             android:name=".AboutActivity"
