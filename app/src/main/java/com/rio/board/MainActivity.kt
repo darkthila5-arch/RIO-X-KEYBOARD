@@ -371,6 +371,39 @@ class MainActivity : Activity() {
         })
     }
 
+    @Suppress("DEPRECATION")
+    private fun installedCode(): Int = try {
+        packageManager.getPackageInfo(packageName, 0).versionCode
+    } catch (e: Exception) {
+        Int.MAX_VALUE
+    }
+
+    private fun refreshUpdate() {
+        if (!::updateBox.isInitialized) return
+        updateBox.removeAllViews()
+        val cfg = RemoteConfig.cached(prefs)
+        cfg.notice?.let { n ->
+            updateBox.addView(card(title("\u26A0\uFE0F  Notice"), note(n.message)).apply {
+                background = bg(Color.parseColor("#33281A"), 18, Color.parseColor("#FFB020"))
+            })
+        }
+        val required = cfg.minVersion > installedCode()
+        val up = cfg.update ?: return
+        if (up.code <= installedCode() || !up.url.startsWith("https://")) return
+        val head = if (up.name.isNotEmpty()) "New version ${up.name}" else "New version"
+        val c = card(
+            title(if (required) "\u26A0\uFE0F  Update required ($head)" else "\uD83C\uDF89  $head is ready"),
+            note(if (up.message.isNotEmpty()) up.message else "Tap to download and install."),
+            btn("Update now") {
+                startActivity(Intent(this@MainActivity, UpdateActivity::class.java).putExtra("url", up.url))
+            }
+        )
+        c.background = if (required) bg(Color.parseColor("#33181A"), 18, Color.parseColor("#FF5C5C"))
+        else bg(Color.parseColor("#2A1A33"), 18, PURPLE)
+        updateBox.addView(c)
+    }
+
+
     private fun stepRow(n: Int, t: String, d: String, done: Boolean, label: String, action: () -> Unit): View {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
