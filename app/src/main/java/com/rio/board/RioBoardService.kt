@@ -4079,7 +4079,8 @@ class RioBoardService : InputMethodService() {
             root.addView(hintText("The web view is not available on this phone."))
             return
         }
-        root.addView(chipRow(listOf("\u25C0 Back", "\u21BB", "Link \u2192 chat", "Open"), -1) { i ->
+        val tall = prefs.getBoolean("gtall", true)
+        root.addView(chipRow(listOf("\u25C0 Back", "\u21BB", "Link", "Open", if (tall) "\u25BC Small" else "\u25B2 Big"), -1) { i ->
             when (i) {
                 0 -> if (w.canGoBack()) w.goBack() else { panel = Panel.NONE; render() }
                 1 -> w.reload()
@@ -4095,10 +4096,16 @@ class RioBoardService : InputMethodService() {
                     val url = w.url ?: ""
                     if (url.isNotEmpty() && !launch(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))) toast("Could not open it")
                 }
+                4 -> {                       // taller keyboard for reading results, or back to the normal size
+                    prefs.edit().putBoolean("gtall", !tall).apply()
+                    render()
+                }
             }
         })
         (w.parent as? ViewGroup)?.removeView(w)
-        w.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(keyH * 4) - dp(42))
+        // tall: the keyboard grows upwards to about half of the screen so the results are easy to read
+        val webH = if (tall) (resources.displayMetrics.heightPixels * 0.5f).toInt() else dp(keyH * 4) - dp(42)
+        w.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, webH)
         try { w.onResume() } catch (e: Exception) { }
         root.addView(w)
     }
