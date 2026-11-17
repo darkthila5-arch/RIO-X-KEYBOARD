@@ -21,6 +21,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.JavascriptInterface
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -33,14 +34,20 @@ import android.widget.Toast
  * Floating YouTube player. Opened from the YouTube panel of the keyboard ("Float"): the video turns into a small
  * Picture-in-Picture window that stays on top of other apps (drag it, resize it, tap it for play/pause or to open it big).
  * The song keeps playing when the keyboard closes or you go to another app.
+ *
+ * It first tries the clean YouTube player. Many songs do not allow that, so when the player reports an error or does
+ * not start in a few seconds it switches to the normal YouTube watch page by itself (and makes the video fill the window).
  */
 class YtPlayerActivity : Activity() {
 
     private lateinit var web: WebView
     private lateinit var bar: LinearLayout
+    private lateinit var status: TextView
+    private lateinit var modeBtn: TextView
     private var id = ""
     private var fullPage = false           // false: clean player (embed), true: the normal YouTube watch page
     private var playing = true
+    private var playerStarted = false
     private val ACTION = "com.rio.board.YT_TOGGLE"
     private var receiverOn = false
 
@@ -48,6 +55,35 @@ class YtPlayerActivity : Activity() {
         override fun onReceive(c: Context?, i: Intent?) {
             toggle()
         }
+    }
+
+    /** Messages from the page: player state (1 = playing, 2 = paused) and errors (the video can not be embedded). */
+    private inner class Bridge {
+        @JavascriptInterface
+        fun state(s: Int) {
+            runOnUiThread {
+                if (s == 1) {
+                    playerStarted = true
+                    playing = true
+                    status.text = "Playing"
+                    if (inPip()) setPipActions()
+                } else if (s == 2) {
+                    playing = false
+                    if (inPip()) setPipActions()
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun error(code: Int) {
+            runOnUiThread {
+                if (!fullPage) switchToFull("This video can not play in the small player, using the full page")
+            }
+        }
+    }
+
+    private val watchdog = Runnable {
+        if (!fullPage && !playerStarted) switchToFull("The player did not start, using the full page")
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -64,36 +100,50 @@ class YtPlayerActivity : Activity() {
             settings.mediaPlaybackRequiresUserGesture = false        // the song starts by itself
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             setBackgroundColor(Color.BLACK)
+            addJavascriptInterface(Bridge(), "RioBridge")
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(v: WebView?, url: String?) {
-                    if (fullPage && inPip()) fillVideo()
+                    if (fullPage) {
+                        kickPlay()
+                        if (inPip()) fillVideo(true)
+                    }
                 }
             }
         }
         root.addView(web, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         bar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply { setColor(0xB0000000.toInt()) }
             setPadding(dp(6), dp(6), dp(6), dp(6))
         }
-        bar.addView(barButton("\u25A3  Float") { enterPip() })
-        val modeBtn = barButton("Full page") { }
-        modeBtn.setOnClickListener {
+        status = TextView(this).apply {
+            text = "Loading..."
+            setTextColor(0xFFCCCCCC.toInt())
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.CENTER
+        }
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        buttons.addView(barButton("\u25A3  Float") { enterPip() })
+        modeBtn = barButton("Full page") {
             fullPage = !fullPage
             modeBtn.text = if (fullPage) "Player" else "Full page"
             loadPlayer()
         }
-        bar.addView(modeBtn)
-        bar.addView(barButton("Open in YouTube") {
+        buttons.addView(modeBtn)
+        buttons.addView(barButton("Open in YouTube") {
             try {
                 startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/watch?v=$id")))
             } catch (e: Exception) {
                 toast("Could not open YouTube")
             }
         })
-        bar.addView(barButton("\u2715") { finish() })
+        buttons.addView(barButton("\u2715") { finish() })
+        bar.addView(buttons)
+        bar.addView(status)
         root.addView(bar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP))
         setContentView(root)
 
@@ -126,8 +176,10 @@ class YtPlayerActivity : Activity() {
         }
         id = v
         playing = true
+        fullPage = false
+        if (::modeBtn.isInitialized) modeBtn.text = "Full page"
         loadPlayer()
-        web.postDelayed({ enterPip() }, 700)        // float right away, the page loads inside the small window
+        web.postDelayed({ enterPip() }, 900)        // float right away, the page loads inside the small window
     }
 
     override fun onNewIntent(i: Intent?) {
@@ -136,17 +188,47 @@ class YtPlayerActivity : Activity() {
         startWith(i)
     }
 
+    private fun switchToFull(msg: String) {
+        fullPage = true
+        modeBtn.text = "Player"
+        status.text = msg
+        toast(msg)
+        loadPlayer()
+    }
+
     private fun loadPlayer() {
         if (id.isEmpty()) return
+        web.removeCallbacks(watchdog)
+        playerStarted = false
         if (fullPage) {
             web.loadUrl("https://m.youtube.com/watch?v=$id")
         } else {
-            // the iframe lives on a youtube.com base address, so YouTube sees a normal embedded player
-            val html = "<html><body style=\"margin:0;background:#000\"><iframe id=\"p\" width=\"100%\" height=\"100%\" " +
-                "style=\"position:fixed;top:0;left:0;border:0\" " +
-                "src=\"https://www.youtube.com/embed/$id?autoplay=1&playsinline=1&enablejsapi=1&rel=0&origin=https://www.youtube.com\" " +
-                "allow=\"autoplay; encrypted-media; picture-in-picture\" allowfullscreen></iframe></body></html>"
+            status.text = "Loading the player..."
+            // the iframe lives on a youtube.com base address so YouTube sees a normal embedded player;
+            // the small script listens to the player and tells us about errors and the playing state
+            val html = """
+                <html><head><meta name="referrer" content="strict-origin-when-cross-origin"></head>
+                <body style="margin:0;background:#000">
+                <iframe id="p" width="100%" height="100%" style="position:fixed;top:0;left:0;border:0"
+                  src="https://www.youtube.com/embed/$id?autoplay=1&playsinline=1&enablejsapi=1&rel=0&origin=https://www.youtube.com"
+                  referrerpolicy="strict-origin-when-cross-origin"
+                  allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+                <script>
+                var f=document.getElementById('p');
+                function listen(){try{f.contentWindow.postMessage(JSON.stringify({event:'listening',id:1,channel:'widget'}),'*');}catch(e){}}
+                function cmd(c){try{f.contentWindow.postMessage(JSON.stringify({event:'command',func:c,args:''}),'*');}catch(e){}}
+                f.addEventListener('load',function(){listen();setTimeout(listen,500);setTimeout(listen,1500);setTimeout(function(){cmd('playVideo');},1200);});
+                window.addEventListener('message',function(e){
+                  var d;try{d=(typeof e.data==='string')?JSON.parse(e.data):e.data;}catch(x){return;}
+                  if(!d)return;
+                  if(d.event==='onError'){RioBridge.error(d.info|0);}
+                  else if(d.event==='onStateChange'){RioBridge.state(d.info|0);}
+                  else if(d.event==='infoDelivery'&&d.info&&typeof d.info.playerState==='number'){RioBridge.state(d.info.playerState);}
+                });
+                </script></body></html>
+            """.trimIndent()
             web.loadDataWithBaseURL("https://www.youtube.com", html, "text/html", "utf-8", null)
+            web.postDelayed(watchdog, 9000)
         }
     }
 
@@ -166,13 +248,28 @@ class YtPlayerActivity : Activity() {
         if (inPip()) setPipActions()
     }
 
-    /** Full-page mode inside the small window: let the video fill it. */
-    private fun fillVideo() {
+    /** Full-page mode: the page is allowed to start the video by itself. */
+    private fun kickPlay() {
         web.evaluateJavascript(
-            "(function(){var v=document.querySelector('video');if(!v)return;document.body.style.overflow='hidden';" +
-                "v.style.cssText='position:fixed!important;top:0;left:0;width:100vw!important;height:100vh!important;" +
-                "object-fit:contain;z-index:2147483647;background:#000';})()", null
+            "(function(){var n=0;var t=setInterval(function(){var v=document.querySelector('video');" +
+                "if(v&&v.paused&&!window.__rioHold){v.play();}if(++n>14)clearInterval(t);},500);})()", null
         )
+        status.text = "Playing (full page)"
+        playerStarted = true
+    }
+
+    /** Full-page mode inside the small window: the video fills the window (a style rule beats the page's own sizes). */
+    private fun fillVideo(on: Boolean) {
+        val js = if (on) {
+            "(function(){var s=document.getElementById('rio-fill');if(!s){s=document.createElement('style');s.id='rio-fill';" +
+                "s.textContent='html,body{background:#000!important;overflow:hidden!important}" +
+                "video{position:fixed!important;top:0!important;left:0!important;width:100vw!important;height:100vh!important;" +
+                "object-fit:contain!important;z-index:2147483647!important;background:#000!important}';" +
+                "document.head.appendChild(s);}})()"
+        } else {
+            "(function(){var s=document.getElementById('rio-fill');if(s)s.remove();})()"
+        }
+        web.evaluateJavascript(js, null)
     }
 
     private fun pipParams(): PictureInPictureParams? {
@@ -216,10 +313,11 @@ class YtPlayerActivity : Activity() {
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         bar.visibility = if (isInPictureInPictureMode) View.GONE else View.VISIBLE
-        if (isInPictureInPictureMode && fullPage) fillVideo()
+        if (fullPage) fillVideo(isInPictureInPictureMode)
     }
 
     override fun onDestroy() {
+        web.removeCallbacks(watchdog)
         if (receiverOn) {
             try { unregisterReceiver(receiver) } catch (e: Exception) { }
             receiverOn = false
