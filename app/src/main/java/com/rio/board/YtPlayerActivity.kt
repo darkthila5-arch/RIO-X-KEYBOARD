@@ -48,6 +48,9 @@ class YtPlayerActivity : Activity() {
     private var fullPage = false           // false: clean player (embed), true: the normal YouTube watch page
     private var playing = true
     private var playerStarted = false
+    private var userPaused = false        // true only when YOU pressed pause in the floating window
+    private var resumes = 0               // how many times we restarted a song the page paused by itself
+    private var pipRequested = false      // float as soon as the video is really playing
     private val ACTION = "com.rio.board.YT_TOGGLE"
     private var receiverOn = false
 
@@ -66,10 +69,22 @@ class YtPlayerActivity : Activity() {
                     playerStarted = true
                     playing = true
                     status.text = "Playing"
+                    if (pipRequested) {                     // float only once the video really runs
+                        pipRequested = false
+                        web.postDelayed({ enterPip() }, 300)
+                    }
                     if (inPip()) setPipActions()
                 } else if (s == 2) {
                     playing = false
                     if (inPip()) setPipActions()
+                    if (!userPaused && !fullPage && resumes < 60) {
+                        // the page paused the song by itself (window change): start it again
+                        resumes++
+                        status.text = "Paused by the page, starting again ($resumes)"
+                        web.postDelayed({ embedCmd("playVideo") }, 400)
+                    }
+                } else if (s == 3) {
+                    status.text = "Buffering..."
                 }
             }
         }
@@ -178,8 +193,17 @@ class YtPlayerActivity : Activity() {
         playing = true
         fullPage = false
         if (::modeBtn.isInitialized) modeBtn.text = "Full page"
+        userPaused = false
+        resumes = 0
+        pipRequested = true
         loadPlayer()
-        web.postDelayed({ enterPip() }, 900)        // float right away, the page loads inside the small window
+        // float as soon as the video plays; if that never happens float anyway after a few seconds
+        web.postDelayed({
+            if (pipRequested) {
+                pipRequested = false
+                enterPip()
+            }
+        }, 3500)
     }
 
     override fun onNewIntent(i: Intent?) {
@@ -234,28 +258,38 @@ class YtPlayerActivity : Activity() {
 
     private fun inPip(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isInPictureInPictureMode
 
+    private fun embedCmd(fn: String) {
+        web.evaluateJavascript(
+            "try{document.getElementById('p').contentWindow.postMessage(JSON.stringify({event:'command',func:'$fn',args:''}),'*')}catch(e){}", null
+        )
+    }
+
     private fun toggle() {
         playing = !playing
+        userPaused = !playing
         if (!fullPage) {
-            val fn = if (playing) "playVideo" else "pauseVideo"
-            web.evaluateJavascript(
-                "document.getElementById('p').contentWindow.postMessage(JSON.stringify({event:'command',func:'$fn',args:''}),'*')", null
-            )
+            embedCmd(if (playing) "playVideo" else "pauseVideo")
         } else {
             val act = if (playing) "play()" else "pause()"
-            web.evaluateJavascript("document.querySelectorAll('video').forEach(function(v){v.$act})", null)
+            web.evaluateJavascript("window.__rioHold=${userPaused};document.querySelectorAll('video').forEach(function(v){v.$act})", null)
         }
         if (inPip()) setPipActions()
     }
 
-    /** Full-page mode: the page is allowed to start the video by itself. */
+    /** Full-page mode: start the video, and start it again whenever the page pauses it by itself. */
     private fun kickPlay() {
         web.evaluateJavascript(
-            "(function(){var n=0;var t=setInterval(function(){var v=document.querySelector('video');" +
-                "if(v&&v.paused&&!window.__rioHold){v.play();}if(++n>14)clearInterval(t);},500);})()", null
+            "(function(){window.__rioHold=false;if(window.__rioTimer)return;window.__rioTimer=setInterval(function(){" +
+                "var v=document.querySelector('video');if(v&&v.paused&&!v.ended&&!window.__rioHold){v.play();}},1000);})()", null
         )
         status.text = "Playing (full page)"
         playerStarted = true
+        if (pipRequested) web.postDelayed({
+            if (pipRequested) {
+                pipRequested = false
+                enterPip()
+            }
+        }, 1500)
     }
 
     /** Full-page mode inside the small window: the video fills the window (a style rule beats the page's own sizes). */
@@ -305,6 +339,21 @@ class YtPlayerActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        web.onResume()
+        web.resumeTimers()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // the floating window is a stopped-looking activity on some phones: keep the page running
+        if (inPip() || playing) {
+            web.onResume()
+            web.resumeTimers()
+        }
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         if (!inPip() && id.isNotEmpty()) enterPip()          // Home button: keep it playing in the floating window
@@ -313,6 +362,8 @@ class YtPlayerActivity : Activity() {
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
         bar.visibility = if (isInPictureInPictureMode) View.GONE else View.VISIBLE
+        web.onResume()
+        web.resumeTimers()
         if (fullPage) fillVideo(isInPictureInPictureMode)
     }
 
