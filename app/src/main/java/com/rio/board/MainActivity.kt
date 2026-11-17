@@ -217,6 +217,7 @@ class MainActivity : Activity() {
         top.addView(ImageView(this).apply {
             setImageResource(R.mipmap.ic_launcher_round)
             layoutParams = LinearLayout.LayoutParams(dp(64), dp(64))
+            setOnClickListener { startActivity(Intent(this@MainActivity, AboutActivity::class.java)) }     // tap the logo: About page
         })
         val names = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -813,6 +814,7 @@ class MainActivity : Activity() {
         val about = card(
             title("\u2139\uFE0F  About"),
             note("RIO BOARD  v$ver"),
+            btn("About RIO BOARD") { startActivity(Intent(this@MainActivity, AboutActivity::class.java)) },
             btn("Check for updates", false) {
                 Toast.makeText(this@MainActivity, "Checking...", Toast.LENGTH_SHORT).show()
                 RemoteConfig.refresh(prefs, true) { refreshUpdate() }

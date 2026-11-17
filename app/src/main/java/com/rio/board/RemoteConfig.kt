@@ -14,7 +14,8 @@ import java.net.URL
 
 /**
  * Reads config.json (themes, news, update notice) that you publish from the admin web page.
- * Only one thing leaves the phone: a plain GET of CONFIG_URL. Nothing the user types is ever sent.
+ * The background check is a plain GET of CONFIG_URL; nothing the user types is sent with it.
+ * (Only when the user taps the Google Translate tool is the chosen text sent to Google, see RioBoardService.)
  */
 object RemoteConfig {
 

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- only used to read the config.json link in RemoteConfig.kt (themes, news). Nothing typed is ever sent. -->
+    <!-- reads the config.json link in RemoteConfig.kt (themes, news) and, only when you tap them, the Google search and Translate tools. Nothing is sent in the background. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- only for the Voice changer tool, asked when you first record -->
@@ -83,6 +83,11 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- About RIO BOARD page -->
+        <activity
+            android:name=".AboutActivity"
+            android:exported="false" />
 
         <!-- Voice changer: record, effect, send as an audio file -->
         <activity
